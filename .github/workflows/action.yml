@@ -10,6 +10,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +32,6 @@ jobs:
         run: pnpm run db:generate
 
       - name: Prisma migrate update
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
         run: pnpm run db:update
 
       - name: Build
@@ -46,6 +46,8 @@ jobs:
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: trainerpt-prod
 
       - name: Deploy to Cloud Run (from source)
         run: |
