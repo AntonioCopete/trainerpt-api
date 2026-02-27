@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start:cloudrun": "pnpm run db:update && node dist/main.js",
-    "build": "nest build",
+    "build": "pnpm run db:generate && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "node dist/main.js",
     "start:prod:migrate": "pnpm run db:update && node dist/main.js",
@@ -85,5 +85,11 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "prisma"
+    ]
   }
 }
