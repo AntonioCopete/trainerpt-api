@@ -1,5 +1,12 @@
+substitutions:
+  _REGION: europe-west1
+  _SERVICE: trainerpt-prod-api
+  _REPO: trainerpt-api
+  _PROJECT_ID: trainerpt-prod
+  _IMAGE: europe-west1-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
+
 steps:
-  # Instalar deps (pnpm via corepack)
+  # Install/build/migrate
   - name: node:24
     entrypoint: bash
     args:
@@ -7,17 +14,10 @@ steps:
       - |
         corepack enable
         pnpm install --frozen-lockfile
-
-  # Prisma generate (no necesita DB)
-  - name: node:24
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        corepack enable
         pnpm run db:generate
+        pnpm run build
+    # (migraciones en step separado con secretEnv)
 
-  # Migraciones (sí necesita DB)
   - name: node:24
     entrypoint: bash
     secretEnv: ['DATABASE_URL']
@@ -27,33 +27,27 @@ steps:
         corepack enable
         pnpm run db:update
 
-  # Build Nest
-  - name: node:24
-    entrypoint: bash
+  # Build image using Google Cloud Buildpacks (no Dockerfile)
+  - name: gcr.io/buildpacks/builder
     args:
-      - -c
-      - |
-        corepack enable
-        pnpm run build
+      - build
+      - ${_IMAGE}
+      - --path=.
+      - --builder=gcr.io/buildpacks/builder:v1
+      - --publish
 
-  # Deploy a Cloud Run desde source (buildpacks)
+  # Deploy to Cloud Run from image
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: gcloud
     args:
-      [
-        'run',
-        'deploy',
-        'trainerpt-prod-api',
-        '--source',
-        '.',
-        '--region',
-        'europe-west1',
-        '--allow-unauthenticated',
-        '--project',
-        'trainerpt-prod',
-      ]
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_IMAGE}
+      - --region=${_REGION}
+      - --allow-unauthenticated
 
 availableSecrets:
   secretManager:
-    - versionName: projects/trainerpt-prod/secrets/DATABASE_URL_PROD/versions/latest
-      env: 'DATABASE_URL'
+    - versionName: projects/$PROJECT_ID/secrets/DATABASE_URL_PROD/versions/latest
+      env: DATABASE_URL
