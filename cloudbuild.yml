@@ -1,0 +1,59 @@
+steps:
+  # Instalar deps (pnpm via corepack)
+  - name: node:24
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        corepack enable
+        pnpm install --frozen-lockfile
+
+  # Prisma generate (no necesita DB)
+  - name: node:24
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        corepack enable
+        pnpm run db:generate
+
+  # Migraciones (sí necesita DB)
+  - name: node:24
+    entrypoint: bash
+    secretEnv: ['DATABASE_URL']
+    args:
+      - -c
+      - |
+        corepack enable
+        pnpm run db:update
+
+  # Build Nest
+  - name: node:24
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        corepack enable
+        pnpm run build
+
+  # Deploy a Cloud Run desde source (buildpacks)
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      [
+        'run',
+        'deploy',
+        'trainerpt-prod-api',
+        '--source',
+        '.',
+        '--region',
+        'europe-west1',
+        '--allow-unauthenticated',
+        '--project',
+        'trainerpt-prod',
+      ]
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/trainerpt-prod/secrets/DATABASE_URL_PROD/versions/latest
+      env: 'DATABASE_URL'
