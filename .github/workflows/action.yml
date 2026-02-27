@@ -54,4 +54,5 @@ jobs:
           gcloud run deploy trainerpt-prod-api \
             --source . \
             --region europe-west1 \
-            --allow-unauthenticated
+            --allow-unauthenticated \
+            --gcs-source-staging-dir gs://trainerpt-prod-run-api
