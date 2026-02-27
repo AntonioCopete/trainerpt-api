@@ -1,11 +1,9 @@
 substitutions:
   _REGION: europe-west1
   _SERVICE: trainerpt-prod-api
-  _REPO: trainerpt-api
-  _PROJECT_ID: trainerpt-prod
-  _IMAGE: europe-west1-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
 
 steps:
+  # Install + generate + build (opcional, si quieres validar)
   - name: node:24
     entrypoint: bash
     args:
@@ -16,6 +14,7 @@ steps:
         pnpm run db:generate
         pnpm run build
 
+  # Migrations (necesita secret)
   - name: node:24
     entrypoint: bash
     secretEnv: ['DATABASE_URL']
@@ -25,21 +24,14 @@ steps:
         corepack enable
         pnpm run db:update
 
-  - name: gcr.io/buildpacks/builder
-    args:
-      - build
-      - ${_IMAGE}
-      - --path=.
-      - --builder=gcr.io/buildpacks/builder:v1
-      - --publish
-
+  # Deploy to Cloud Run FROM SOURCE (buildpacks) - aquí se construye y despliega
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: gcloud
     args:
       - run
       - deploy
       - ${_SERVICE}
-      - --image=${_IMAGE}
+      - --source=.
       - --region=${_REGION}
       - --allow-unauthenticated
 
