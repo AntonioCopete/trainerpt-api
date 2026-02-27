@@ -1,0 +1,55 @@
+name: Deploy API (Cloud Run)
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate
+        run: pnpm run db:generate
+
+      - name: Prisma migrate update
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
+        run: pnpm run db:update
+
+      - name: Build
+        run: pnpm run build
+
+      # Auth a GCP sin keys (OIDC)
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/147408060771/locations/global/workloadIdentityPools/github-pool/providers/github
+          service_account: api-prod-ci@trainerpt-prod.iam.gserviceaccount.com
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run (from source)
+        run: |
+          gcloud run deploy trainerpt-api \
+            --source . \
+            --region europe-west1 \
+            --allow-unauthenticated
