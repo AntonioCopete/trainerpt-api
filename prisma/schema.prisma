@@ -1,0 +1,176 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+  moduleFormat = "cjs"
+
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  trainer
+  member
+}
+
+enum AssignmentStatus {
+  pending
+  completed
+  archived
+}
+
+enum RepeatCadence {
+  none
+  weekly
+  monthly
+}
+
+model User {
+  /// Supabase auth.users.id (UUID)
+  id        String   @id @db.Uuid
+  email     String   @unique
+  fullName  String?  @db.VarChar(255)
+  role      UserRole? 
+
+  avatarUrl String?  @db.VarChar(1024)
+  auth_provider String   @db.VarChar(50)
+
+  deleted       Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Trainer <-> Member relationships
+  trainerLinks TrainerMemberLink[] @relation("Trainer")
+  memberLinks  TrainerMemberLink[] @relation("Member")
+
+  invitesAsTrainer TrainerInvite[] @relation("InviteTrainer")
+  invitesAsMember  TrainerInvite[] @relation("InviteMember")
+
+  // Forms
+  formTemplates             FormTemplate[]   @relation("TemplateTrainer")
+  formAssignmentsAsTrainer  FormAssignment[] @relation("AssignmentTrainer")
+  formAssignmentsAsMember   FormAssignment[] @relation("AssignmentMember")
+  formResponses             FormResponse[]
+
+  // Index
+  @@index([id])
+}
+
+enum TrainerInviteStatus {
+  pending
+  accepted
+  cancelled
+  expired
+}
+
+model TrainerInvite {
+  id        String   @id @default(uuid()) @db.Uuid
+  trainerId String   @db.Uuid
+  memberId  String?  @db.Uuid
+
+  email     String?   @db.VarChar(255)
+  code      String   @unique @db.VarChar(32)
+
+  status    TrainerInviteStatus @default(pending)
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  acceptedAt DateTime?
+
+  trainer User  @relation("InviteTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  member  User? @relation("InviteMember", fields: [memberId], references: [id], onDelete: SetNull)
+
+  @@index([trainerId, status])
+  @@index([email, status])
+}
+
+model TrainerMemberLink {
+  id        String   @id @default(uuid()) @db.Uuid
+  trainerId String   @db.Uuid
+  memberId  String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  trainer User @relation("Trainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  member  User @relation("Member",  fields: [memberId],  references: [id], onDelete: Cascade)
+
+  @@unique([trainerId, memberId])
+  @@index([trainerId])
+  @@index([memberId])
+}
+
+model FormTemplate {
+  id                String   @id @default(uuid()) @db.Uuid
+  trainerId         String   @db.Uuid
+  name              String   @db.VarChar(120)
+  description       String   @db.VarChar(256)
+
+  /// JSON schema for the form (fields, types, required, ordering, etc.)
+  schema     Json
+
+  isArchived Boolean  @default(false)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  trainer    User           @relation("TemplateTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  assignments FormAssignment[]
+
+  @@index([trainerId, isArchived])
+  @@index([trainerId])
+  @@unique([trainerId, name]) // optional, can remove if you want duplicate names
+}
+
+model FormAssignment {
+  id            String   @id @default(uuid()) @db.Uuid
+  trainerId      String  @db.Uuid
+  memberId       String  @db.Uuid
+
+  /// If you enforce "send only from templates", make this required (remove '?').
+  templateId     String? @db.Uuid
+
+  /// Snapshot of schema at send time (recommended even if templateId exists)
+  schemaSnapshot Json
+
+  status         AssignmentStatus @default(pending)
+  dueAt          DateTime?
+  repeat         RepeatCadence    @default(none)
+  nextDueAt      DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  trainer  User         @relation("AssignmentTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  member   User         @relation("AssignmentMember",  fields: [memberId],  references: [id], onDelete: Cascade)
+  template FormTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  responses FormResponse[]
+
+  @@index([memberId, status])
+  @@index([trainerId, createdAt])
+  @@index([templateId])
+}
+
+model FormResponse {
+  id           String   @id @default(uuid()) @db.Uuid
+  assignmentId String   @db.Uuid
+  memberId     String   @db.Uuid
+
+  /// Answers: { fieldId: value }
+  answers      Json
+
+  submittedAt  DateTime @default(now())
+
+  assignment FormAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  member     User           @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([assignmentId, submittedAt])
+  @@index([memberId, submittedAt])
+}
+
