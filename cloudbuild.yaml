@@ -6,7 +6,6 @@ substitutions:
   _IMAGE: europe-west1-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
 
 steps:
-  # Install/build/migrate
   - name: node:24
     entrypoint: bash
     args:
@@ -16,7 +15,6 @@ steps:
         pnpm install --frozen-lockfile
         pnpm run db:generate
         pnpm run build
-    # (migraciones en step separado con secretEnv)
 
   - name: node:24
     entrypoint: bash
@@ -27,7 +25,6 @@ steps:
         corepack enable
         pnpm run db:update
 
-  # Build image using Google Cloud Buildpacks (no Dockerfile)
   - name: gcr.io/buildpacks/builder
     args:
       - build
@@ -36,7 +33,6 @@ steps:
       - --builder=gcr.io/buildpacks/builder:v1
       - --publish
 
-  # Deploy to Cloud Run from image
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: gcloud
     args:
@@ -49,7 +45,7 @@ steps:
 
 availableSecrets:
   secretManager:
-    - versionName: projects/$PROJECT_ID/secrets/DATABASE_URL_PROD/versions/latest
+    - versionName: projects/147408060771/secrets/DATABASE_URL_PROD/versions/latest
       env: DATABASE_URL
 
 options:
