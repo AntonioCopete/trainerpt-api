@@ -3,18 +3,6 @@ substitutions:
   _SERVICE: trainerpt-prod-api
 
 steps:
-  # Install + generate + build (opcional, si quieres validar)
-  - name: node:24
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        corepack enable
-        pnpm install --frozen-lockfile
-        pnpm run db:generate
-        pnpm run build
-
-  # Migrations (necesita secret)
   - name: node:24
     entrypoint: bash
     secretEnv: ['DATABASE_URL']
@@ -22,9 +10,9 @@ steps:
       - -c
       - |
         corepack enable
+        pnpm install --frozen-lockfile
         pnpm run db:update
 
-  # Deploy to Cloud Run FROM SOURCE (buildpacks) - aquí se construye y despliega
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: gcloud
     args:
