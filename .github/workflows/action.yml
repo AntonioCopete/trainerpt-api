@@ -49,7 +49,7 @@ jobs:
 
       - name: Deploy to Cloud Run (from source)
         run: |
-          gcloud run deploy trainerpt-api \
+          gcloud run deploy trainerpt-prod-api \
             --source . \
             --region europe-west1 \
             --allow-unauthenticated
