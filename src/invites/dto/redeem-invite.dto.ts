@@ -4,4 +4,3 @@ export class RedeemInviteDto {
   @IsString()
   code!: string;
 }
-
