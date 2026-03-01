@@ -2,7 +2,7 @@ name: Deploy API to Cloud Run
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 env:
   REGION: europe-west1
