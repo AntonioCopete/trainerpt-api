@@ -11,6 +11,7 @@ env:
   IMAGE_NAME: api
   GCP_CI_SA: ${{ secrets.GCP_CI_PROD_SA }}
   DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
+  GCP_PROJECT_ID: trainerpt-prod
 
 jobs:
   deploy:
@@ -54,7 +55,7 @@ jobs:
 
       - name: Build + push Docker image
         env:
-          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
         run: |
           IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}:${GITHUB_SHA}"
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
