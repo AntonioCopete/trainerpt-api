@@ -97,10 +97,12 @@ export class FormsController {
   async getAssignments(
     @CurrentUser() user: AuthUser,
     @Query('memberId') memberId?: string,
+    @Query('templateId') templateId?: string,
   ) {
     const assignments = await this.formsService.getAssignments(
       user.id,
       memberId,
+      templateId,
     );
     return { assignments };
   }

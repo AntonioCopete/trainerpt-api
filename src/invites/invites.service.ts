@@ -67,11 +67,19 @@ export class InvitesService {
       where: { code: dto.code },
     });
 
-    if (!invite || invite.status !== 'pending') {
-      throw new BadRequestException('Invite is invalid or already used');
+    if (!invite) {
+      throw new BadRequestException('Invite not found');
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const currentInvite = await tx.trainerInvite.findUnique({
+        where: { id: invite.id },
+      });
+
+      if (!currentInvite || currentInvite.status !== 'pending') {
+        throw new BadRequestException('Invite is invalid or already used');
+      }
+
       const existingLink = await tx.trainerMemberLink.findUnique({
         where: {
           trainerId_memberId: {

@@ -104,17 +104,21 @@ export class FormsService {
   }
 
   async archiveTemplate(trainerId: string, templateId: string) {
-    const template = await this.prisma.formTemplate.updateMany({
+    const template = await this.prisma.formTemplate.findFirst({
       where: {
         id: templateId,
         trainerId,
       },
-      data: {
-        isArchived: true,
-      },
     });
 
-    return template;
+    if (!template) {
+      throw new NotFoundException('Template not found');
+    }
+
+    return await this.prisma.formTemplate.update({
+      where: { id: templateId },
+      data: { isArchived: true },
+    });
   }
 
   async updateTemplate(
@@ -122,6 +126,17 @@ export class FormsService {
     templateId: string,
     dto: UpdateFormTemplateDto,
   ) {
+    const existing = await this.prisma.formTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Template not found');
+    }
+
     const data: any = {};
 
     if (dto.name !== undefined) data.name = dto.name;
@@ -135,15 +150,10 @@ export class FormsService {
       data.schema = formFields as any;
     }
 
-    const template = await this.prisma.formTemplate.updateMany({
-      where: {
-        id: templateId,
-        trainerId,
-      },
+    return await this.prisma.formTemplate.update({
+      where: { id: templateId },
       data,
     });
-
-    return template;
   }
 
   async assignTemplate(
@@ -190,10 +200,41 @@ export class FormsService {
   }
 
   /**
-   * Get assignments for the current user as member (no memberId),
-   * or for a specific member when current user is their trainer (memberId in query).
+   * Get assignments:
+   * - templateId: trainer view → assignments for that template (trainerId + templateId).
+   * - memberId: trainer view → assignments for that member (trainerId + memberId).
+   * - neither: member view → current user's assignments (memberId = userId).
    */
-  async getAssignments(userId: string, memberId?: string) {
+  async getAssignments(userId: string, memberId?: string, templateId?: string) {
+    const includeTemplate = {
+      template: {
+        select: { id: true, name: true, description: true },
+      },
+    };
+
+    if (templateId) {
+      const template = await this.prisma.formTemplate.findFirst({
+        where: { id: templateId, trainerId: userId },
+      });
+      if (!template) {
+        throw new NotFoundException('Template not found');
+      }
+      const where: {
+        trainerId: string;
+        templateId: string;
+        memberId?: string;
+      } = { trainerId: userId, templateId };
+      if (memberId) where.memberId = memberId;
+      return this.prisma.formAssignment.findMany({
+        where,
+        include: {
+          ...includeTemplate,
+          member: { select: { id: true, fullName: true, email: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
     if (memberId) {
       const link = await this.prisma.trainerMemberLink.findUnique({
         where: {
@@ -205,22 +246,14 @@ export class FormsService {
       }
       return this.prisma.formAssignment.findMany({
         where: { trainerId: userId, memberId },
-        include: {
-          template: {
-            select: { id: true, name: true, description: true },
-          },
-        },
+        include: includeTemplate,
         orderBy: { createdAt: 'desc' },
       });
     }
 
     return this.prisma.formAssignment.findMany({
       where: { memberId: userId },
-      include: {
-        template: {
-          select: { id: true, name: true, description: true },
-        },
-      },
+      include: includeTemplate,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -258,28 +291,36 @@ export class FormsService {
     assignmentId: string,
     dto: SubmitAssignmentDto,
   ) {
-    const assignment = await this.prisma.formAssignment.findUnique({
-      where: { id: assignmentId, memberId },
-    });
-    if (!assignment) {
-      throw new NotFoundException('Assignment not found');
-    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      const assignment = await tx.formAssignment.findUnique({
+        where: { id: assignmentId, memberId },
+      });
 
-    const [response] = await this.prisma.$transaction([
-      this.prisma.formResponse.create({
+      if (!assignment) {
+        throw new NotFoundException('Assignment not found');
+      }
+
+      if (assignment.status === 'completed') {
+        throw new ForbiddenException('Assignment already completed');
+      }
+
+      const response = await tx.formResponse.create({
         data: {
           assignmentId,
           memberId,
           answers: dto.answers as any,
         },
-      }),
-      this.prisma.formAssignment.update({
+      });
+
+      await tx.formAssignment.update({
         where: { id: assignmentId },
         data: { status: 'completed' },
-      }),
-    ]);
+      });
 
-    return response;
+      return response;
+    });
+
+    return result;
   }
 
   async getPresignedUploadUrl(
@@ -292,6 +333,11 @@ export class FormsService {
     });
     if (!assignment) {
       throw new NotFoundException('Assignment not found');
+    }
+    if (assignment.status === 'completed') {
+      throw new ForbiddenException(
+        'Cannot upload files to a completed assignment',
+      );
     }
     return this.s3Upload.getPresignedUploadUrl(
       assignmentId,

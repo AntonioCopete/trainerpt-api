@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsIn,
   IsNotEmpty,
   IsObject,
   IsOptional,
@@ -16,7 +17,6 @@ export class CreateFormTemplateDto {
   @IsNotEmpty()
   description!: string;
 
-  // Accepts arbitrary JSON fields definition
   @IsOptional()
   customFields?: Array<any>;
 }
@@ -58,5 +58,8 @@ export class PresignedUploadUrlDto {
 
   @IsString()
   @IsNotEmpty()
+  @IsIn(['image/jpeg'], {
+    message: 'Content type must be image/jpeg',
+  })
   contentType!: string;
 }
