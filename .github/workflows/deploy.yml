@@ -7,11 +7,7 @@ on:
 env:
   REGION: europe-west1
   SERVICE: trainerpt-prod-api
-  AR_REPO: trainerpt
-  IMAGE_NAME: api
-  GCP_CI_SA: ${{ secrets.GCP_CI_PROD_SA }}
-  DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
-  GCP_PROJECT_ID: trainerpt-prod
+  PROJECT_ID: trainerpt-prod
 
 jobs:
   deploy:
@@ -34,10 +30,7 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm run build
-
-      - name: Run Prisma migrations (deploy)
+      - name: Run Prisma migrations
         run: pnpm exec prisma migrate deploy
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -47,25 +40,22 @@ jobs:
         with:
           credentials_json: ${{ env.GCP_CI_SA }}
 
-      - name: Setup gcloud
+      - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker auth (Artifact Registry)
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
-      - name: Build + push Docker image
-        env:
-          PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
+      - name: Build and Push
         run: |
-          IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}:${GITHUB_SHA}"
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE }}:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-          docker build -t "$IMAGE_URI" .
-          docker push "$IMAGE_URI"
-
-      - name: Deploy to Cloud Run (image)
+      - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "${{ env.SERVICE }}" \
-            --image "${{ env.IMAGE_URI }}" \
+            --image "${{ env.IMAGE }}" \
             --region "${{ env.REGION }}" \
             --allow-unauthenticated
