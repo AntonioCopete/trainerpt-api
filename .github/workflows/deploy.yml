@@ -39,12 +39,12 @@ jobs:
       - name: Run Prisma migrations (deploy)
         run: pnpm exec prisma migrate deploy
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_CI_SA }}
+          credentials_json: ${{ env.GCP_CI_SA }}
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
