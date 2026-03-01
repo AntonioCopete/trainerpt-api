@@ -8,6 +8,8 @@ env:
   REGION: europe-west1
   SERVICE: trainerpt-prod-api
   PROJECT_ID: trainerpt-prod
+  DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
+  GCP_CI_SA: ${{ secrets.GCP_CI_PROD_SA }}
 
 jobs:
   deploy:
