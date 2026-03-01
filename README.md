@@ -1,112 +1,171 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# TrainerPT Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## Deploy automático con GitHub Actions
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Cada push a `main` ejecuta automáticamente:
+1. ✅ Migraciones de base de datos (1 sola vez)
+2. ✅ Deploy a Cloud Run
 
-## Description
+## Configuración inicial (una sola vez)
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+### Opción A: Workload Identity Federation (Recomendado - Sin keys)
 
-## Project setup
+#### 1. Crear Workload Identity Pool
 
 ```bash
-$ pnpm install
+PROJECT_ID="tu-project-id"
+REPO="tu-usuario/tu-repo"  # Ejemplo: antoniocb/trainer
+
+# Crear pool
+gcloud iam workload-identity-pools create "github" \
+  --project="${PROJECT_ID}" \
+  --location="global" \
+  --display-name="GitHub Actions Pool"
+
+# Crear provider
+gcloud iam workload-identity-pools providers create-oidc "github-provider" \
+  --project="${PROJECT_ID}" \
+  --location="global" \
+  --workload-identity-pool="github" \
+  --display-name="GitHub Provider" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
+  --issuer-uri="https://token.actions.githubusercontent.com"
+
+# Crear service account
+gcloud iam service-accounts create github-actions \
+  --display-name="GitHub Actions"
+
+# Dar permisos al service account
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+  --member="serviceAccount:github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/run.admin"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+  --member="serviceAccount:github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+
+# Permitir que GitHub Actions use el service account
+gcloud iam service-accounts add-iam-policy-binding \
+  "github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --project="${PROJECT_ID}" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/${REPO}"
 ```
 
-## Compile and run the project
+**Nota**: Reemplaza `PROJECT_NUMBER` con el número de tu proyecto (lo encuentras en Cloud Console).
+
+#### 2. Configurar GitHub Secrets
+
+```
+DATABASE_URL           = postgresql://user:pass@host:5432/db
+WIF_PROVIDER          = projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github-provider
+WIF_SERVICE_ACCOUNT   = github-actions@PROJECT_ID.iam.gserviceaccount.com
+```
+
+### Opción B: Service Account Key (Más simple pero menos seguro)
+
+Si prefieres la forma simple con JSON key:
 
 ```bash
-# development
-$ pnpm run start
+# Crear SA
+gcloud iam service-accounts create github-actions \
+  --display-name="GitHub Actions"
 
-# watch mode
-$ pnpm run start:dev
+# Dar permisos
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/run.admin"
 
-# production mode
-$ pnpm run start:prod
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+
+# Crear key
+gcloud iam service-accounts keys create key.json \
+  --iam-account=github-actions@PROJECT_ID.iam.gserviceaccount.com
 ```
 
-## Run tests
+GitHub Secrets:
+```
+DATABASE_URL    = postgresql://user:pass@host:5432/db
+GCP_SA_KEY      = (contenido completo del key.json)
+```
+
+Y cambiar en `.github/workflows/deploy.yml`:
+```yaml
+- uses: google-github-actions/auth@v2
+  with:
+    credentials_json: ${{ secrets.GCP_SA_KEY }}
+```
+
+### 3. Configurar variables de entorno en Cloud Run (solo primera vez)
+
+Ve a Cloud Run Console → `trainerpt-prod-api` → Edit & Deploy New Revision → Variables:
+
+```
+PORT=8080
+WEB_URL=https://tu-frontend.com
+SUPABASE_JWT_ISSUER=https://xxx.supabase.co/auth/v1
+SUPABASE_JWT_AUDIENCE=authenticated
+GCS_BUCKET=trainerpt-dev
+```
+
+Y en "Secrets":
+- `DATABASE_URL` → Reference secret `DATABASE_URL_PROD:latest`
+
+Y en "Security":
+- Service account: `trainerpt-api@PROJECT_ID.iam.gserviceaccount.com`
+
+### 4. Crear secret DATABASE_URL en GCP Secret Manager (para Cloud Run)
 
 ```bash
-# unit tests
-$ pnpm run test
-
-# e2e tests
-$ pnpm run test:e2e
-
-# test coverage
-$ pnpm run test:cov
+echo -n "postgresql://user:pass@host:5432/db" | \
+  gcloud secrets create DATABASE_URL_PROD --data-file=-
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### 5. Crear service account para Cloud Run (acceso a GCS)
 
 ```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
+gcloud iam service-accounts create trainerpt-api \
+  --display-name="TrainerPT API"
+
+# Dar acceso al bucket
+gsutil iam ch serviceAccount:trainerpt-api@PROJECT_ID.iam.gserviceaccount.com:objectAdmin \
+  gs://trainerpt-dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Migrations
-
-Prisma migrations
-
-Generate migrations
+## Uso
 
 ```bash
-pnpm prisma migrate dev --name name
+git add .
+git commit -m "update"
+git push origin main
 ```
+
+GitHub Actions automáticamente:
+- Ejecuta migraciones
+- Despliega a Cloud Run
+- Si algo falla, no despliega
+
+## Ventajas
+
+✅ **Migraciones ejecutan 1 sola vez** en GitHub Actions (no en cada contenedor)  
+✅ **Si migración falla, deploy se cancela** automáticamente  
+✅ **Logs separados**: migraciones vs app  
+✅ **Startup rápido**: contenedores solo inician el server  
+✅ **Zero race conditions**: solo 1 runner ejecuta migraciones  
+
+## Deploy manual (opcional)
+
+Si necesitas deployar sin GitHub Actions:
 
 ```bash
-pnpm exec prisma generate
+# 1. Ejecutar migraciones localmente
+pnpm run db:update
+
+# 2. Deploy
+gcloud run deploy trainerpt-prod-api \
+  --source . \
+  --region europe-west1 \
+  --allow-unauthenticated
 ```
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
