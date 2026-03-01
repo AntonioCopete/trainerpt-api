@@ -1,0 +1,52 @@
+# Node
+node_modules
+npm-debug.log
+pnpm-debug.log
+yarn-error.log
+
+# Build output
+dist
+build
+.next
+out
+
+# Environment files (NEVER include these in the image)
+.env
+.env.*
+!.env.example
+service-account.json
+
+# Testing
+coverage
+.nyc_output
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docs and configs not needed in container
+README.md
+.prettierrc
+.eslintrc.js
+eslint.config.mjs
+
+# Tests
+test
+*.spec.ts
+*.test.ts
+
+# CI/CD
+.github
+cloudbuild.yaml

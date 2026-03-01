@@ -13,9 +13,12 @@ export class S3UploadService {
   constructor(private readonly config: ConfigService) {
     this.bucket = this.config.get<string>('GCS_BUCKET') ?? '';
 
-    // Usa Application Default Credentials. En local, apunta
-    // GOOGLE_APPLICATION_CREDENTIALS al JSON del service account (service-account.json).
-    this.storage = new Storage();
+    // En local: usa GOOGLE_APPLICATION_CREDENTIALS (JSON)
+    // En Cloud Run: usa Workload Identity (Application Default Credentials)
+    const keyFilename = this.config.get<string>(
+      'GOOGLE_APPLICATION_CREDENTIALS',
+    );
+    this.storage = new Storage(keyFilename ? { keyFilename } : {});
   }
 
   /**
