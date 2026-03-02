@@ -14,9 +14,10 @@ export class PrismaService
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: {
-        rejectUnauthorized: false, // Acepta certificados auto-firmados
+        rejectUnauthorized: false,
       },
     });
+    console.log('PrismaService: SSL configured with rejectUnauthorized: false');
     super({ adapter: new PrismaPg(pool) });
     this.pool = pool;
   }
