@@ -2,10 +2,13 @@ import {
   IsDateString,
   IsIn,
   IsNotEmpty,
+  IsNumber,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
+  Min,
 } from 'class-validator';
 
 export class CreateFormTemplateDto {
@@ -62,4 +65,10 @@ export class PresignedUploadUrlDto {
     message: 'Content type must be image/jpeg',
   })
   contentType!: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(10 * 1024 * 1024) // 10MB max
+  fileSize?: number;
 }

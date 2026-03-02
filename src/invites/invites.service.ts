@@ -32,6 +32,20 @@ export class InvitesService {
       throw new BadRequestException('Trainer not found');
     }
 
+    // Límite: máximo 100 invites pendientes por trainer
+    const pendingInvitesCount = await this.prisma.trainerInvite.count({
+      where: {
+        trainerId,
+        status: 'pending',
+      },
+    });
+
+    if (pendingInvitesCount >= 100) {
+      throw new BadRequestException(
+        'Maximum pending invites limit reached (100)',
+      );
+    }
+
     const code = this.generateCode();
 
     const invite = await this.prisma.trainerInvite.create({

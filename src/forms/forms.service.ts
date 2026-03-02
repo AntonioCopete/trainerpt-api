@@ -186,6 +186,22 @@ export class FormsService {
       throw new ForbiddenException('Member is not linked to trainer');
     }
 
+    // Verificar si ya existe un assignment pendiente del mismo template
+    const existingPending = await this.prisma.formAssignment.findFirst({
+      where: {
+        trainerId,
+        memberId: dto.memberId,
+        templateId: template.id,
+        status: 'pending',
+      },
+    });
+
+    if (existingPending) {
+      throw new ForbiddenException(
+        'Member already has a pending assignment for this template',
+      );
+    }
+
     const assignment = await this.prisma.formAssignment.create({
       data: {
         trainerId,
