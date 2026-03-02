@@ -18,7 +18,7 @@ export class InvitesController {
     @Body() dto: CreateInviteDto,
   ) {
     const invite = await this.invitesService.createInvite(user.id, dto);
-    const inviteUrl = `${process.env.WEB_URL}/register?code=${invite.code}`;
+    const inviteUrl = `${process.env.WEB_URL}/join?code=${invite.code}`;
     return { url: inviteUrl };
   }
 
