@@ -114,7 +114,8 @@ model FormTemplate {
   /// JSON schema for the form (fields, types, required, ordering, etc.)
   schema     Json
 
-  isArchived Boolean  @default(false)
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
 
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -122,7 +123,7 @@ model FormTemplate {
   trainer    User           @relation("TemplateTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
   assignments FormAssignment[]
 
-  @@index([trainerId, isArchived])
+  @@index([trainerId, isArchived, deletedAt])
   @@index([trainerId])
   @@unique([trainerId, name]) // optional, can remove if you want duplicate names
 }

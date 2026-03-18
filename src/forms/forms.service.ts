@@ -25,6 +25,7 @@ export class FormsService {
       where: {
         trainerId,
         isArchived: false,
+        deletedAt: null,
       },
     });
     return templates;
@@ -35,6 +36,7 @@ export class FormsService {
       where: {
         trainerId,
         isArchived: true,
+        deletedAt: null,
       },
       orderBy: {
         updatedAt: 'desc',
@@ -48,6 +50,7 @@ export class FormsService {
       where: {
         trainerId,
         id: templateId,
+        deletedAt: null,
       },
     });
     return template;
@@ -71,6 +74,7 @@ export class FormsService {
       where: {
         id: templateId,
         trainerId,
+        deletedAt: null,
       },
     });
 
@@ -78,10 +82,37 @@ export class FormsService {
       return null;
     }
 
+    // Buscar cuántas copias existen ya con este nombre base (excluyendo borradas)
+    const existingCopies = await this.prisma.formTemplate.count({
+      where: {
+        trainerId,
+        deletedAt: null,
+        name: {
+          startsWith: `${existing.name} (copia`,
+        },
+      },
+    });
+
+    // También verificar si existe el nombre base + " (copia)"
+    const exactCopy = await this.prisma.formTemplate.findFirst({
+      where: {
+        trainerId,
+        deletedAt: null,
+        name: `${existing.name} (copia)`,
+      },
+    });
+
+    let newName: string;
+    if (!exactCopy && existingCopies === 0) {
+      newName = `${existing.name} (copia)`;
+    } else {
+      newName = `${existing.name} (copia ${existingCopies + 1})`;
+    }
+
     const duplicated = await this.prisma.formTemplate.create({
       data: {
         trainerId,
-        name: `${existing.name} (copy ${Date.now()})`,
+        name: newName,
         description: existing.description,
         schema: existing.schema as any,
       },
@@ -95,11 +126,13 @@ export class FormsService {
       where: {
         id: templateId,
         trainerId,
+        deletedAt: null,
+        isArchived: false, // Solo archivar si no está ya archivada
       },
     });
 
     if (!template) {
-      throw new NotFoundException('Template not found');
+      throw new NotFoundException('Template not found or already archived');
     }
 
     return await this.prisma.formTemplate.update({
@@ -113,16 +146,38 @@ export class FormsService {
       where: {
         id: templateId,
         trainerId,
+        deletedAt: null,
+        isArchived: true, // Solo restaurar si está archivada
       },
     });
 
     if (!template) {
-      throw new NotFoundException('Template not found');
+      throw new NotFoundException('Template not found or not archived');
     }
 
     return await this.prisma.formTemplate.update({
       where: { id: templateId },
       data: { isArchived: false },
+    });
+  }
+
+  async deleteTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.formTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: true,
+      },
+    });
+
+    if (!template) {
+      throw new NotFoundException('Template not found or already deleted');
+    }
+
+    return await this.prisma.formTemplate.update({
+      where: { id: templateId },
+      data: { deletedAt: new Date() },
     });
   }
 
@@ -135,6 +190,7 @@ export class FormsService {
       where: {
         id: templateId,
         trainerId,
+        deletedAt: null,
       },
     });
 
@@ -164,6 +220,7 @@ export class FormsService {
         id: templateId,
         trainerId,
         isArchived: false,
+        deletedAt: null,
       },
     });
 

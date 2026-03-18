@@ -73,12 +73,25 @@ export class FormsController {
   }
 
   @UseGuards(SupabaseJwtGuard)
+  @Patch('template/:templateId/archive')
+  async archiveTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.formsService.archiveTemplate(
+      user.id,
+      templateId,
+    );
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
   @Delete('template/:templateId')
   async deleteTemplate(
     @CurrentUser() user: AuthUser,
     @Param('templateId') templateId: string,
   ) {
-    const template = await this.formsService.archiveTemplate(
+    const template = await this.formsService.deleteTemplate(
       user.id,
       templateId,
     );
