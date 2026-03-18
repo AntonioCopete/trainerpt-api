@@ -13,10 +13,6 @@ import {
 } from './dto/create-form-template.dto';
 import { S3UploadService } from './s3-upload.service';
 
-type FormField =
-  | { type: 'number'; label: string; required: boolean }
-  | { type: 'photo'; label: string; required: boolean };
-
 @Injectable()
 export class FormsService {
   constructor(
@@ -24,28 +20,24 @@ export class FormsService {
     private readonly s3Upload: S3UploadService,
   ) {}
 
-  private readonly requiredFormFields: FormField[] = [
-    { type: 'number', label: 'Peso', required: true },
-    { type: 'number', label: 'Edad', required: true },
-
-    { type: 'number', label: 'Hombros', required: true },
-    { type: 'number', label: 'Pecho', required: true },
-    { type: 'number', label: 'Pecho', required: true },
-    { type: 'number', label: 'Bíceps', required: true },
-    { type: 'number', label: 'Cintura', required: true },
-    { type: 'number', label: 'Cadera', required: true },
-    { type: 'number', label: 'Cuádriceps', required: true },
-    { type: 'number', label: 'Gemelos', required: true },
-
-    { type: 'photo', label: 'Foto frontal', required: true },
-    { type: 'photo', label: 'Foto lateral', required: true },
-  ];
-
   async getTemplates(trainerId: string) {
     const templates = await this.prisma.formTemplate.findMany({
       where: {
         trainerId,
         isArchived: false,
+      },
+    });
+    return templates;
+  }
+
+  async getArchivedTemplates(trainerId: string) {
+    const templates = await this.prisma.formTemplate.findMany({
+      where: {
+        trainerId,
+        isArchived: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
       },
     });
     return templates;
@@ -62,17 +54,12 @@ export class FormsService {
   }
 
   async createTemplate(trainerId: string, dto: CreateFormTemplateDto) {
-    const formFields: FormField[] = [
-      ...this.requiredFormFields,
-      ...(dto.customFields ?? []),
-    ];
-
     const template = await this.prisma.formTemplate.create({
       data: {
         trainerId,
         name: dto.name,
         description: dto.description,
-        schema: formFields as any,
+        schema: dto.schema as any,
       },
     });
 
@@ -121,6 +108,24 @@ export class FormsService {
     });
   }
 
+  async restoreTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.formTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+      },
+    });
+
+    if (!template) {
+      throw new NotFoundException('Template not found');
+    }
+
+    return await this.prisma.formTemplate.update({
+      where: { id: templateId },
+      data: { isArchived: false },
+    });
+  }
+
   async updateTemplate(
     trainerId: string,
     templateId: string,
@@ -141,14 +146,7 @@ export class FormsService {
 
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-
-    if (dto.customFields !== undefined) {
-      const formFields: FormField[] = [
-        ...this.requiredFormFields,
-        ...(dto.customFields ?? []),
-      ];
-      data.schema = formFields as any;
-    }
+    if (dto.schema !== undefined) data.schema = dto.schema as any;
 
     return await this.prisma.formTemplate.update({
       where: { id: templateId },

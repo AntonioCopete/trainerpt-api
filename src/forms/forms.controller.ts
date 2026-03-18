@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -28,6 +29,13 @@ export class FormsController {
   @Get('template')
   async getTemplates(@CurrentUser() user: AuthUser) {
     const templates = await this.formsService.getTemplates(user.id);
+    return { templates };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Get('template/archived')
+  async getArchivedTemplates(@CurrentUser() user: AuthUser) {
+    const templates = await this.formsService.getArchivedTemplates(user.id);
     return { templates };
   }
 
@@ -65,12 +73,25 @@ export class FormsController {
   }
 
   @UseGuards(SupabaseJwtGuard)
-  @Post('template/:templateId/delete')
+  @Delete('template/:templateId')
   async deleteTemplate(
     @CurrentUser() user: AuthUser,
     @Param('templateId') templateId: string,
   ) {
     const template = await this.formsService.archiveTemplate(
+      user.id,
+      templateId,
+    );
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('template/:templateId/restore')
+  async restoreTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.formsService.restoreTemplate(
       user.id,
       templateId,
     );

@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsDateString,
   IsIn,
   IsNotEmpty,
@@ -20,8 +21,9 @@ export class CreateFormTemplateDto {
   @IsNotEmpty()
   description!: string;
 
-  @IsOptional()
-  customFields?: Array<any>;
+  @IsArray()
+  @IsNotEmpty()
+  schema!: Array<any>;
 }
 
 export class UpdateFormTemplateDto {
@@ -36,7 +38,8 @@ export class UpdateFormTemplateDto {
   description?: string;
 
   @IsOptional()
-  customFields?: Array<any>;
+  @IsArray()
+  schema?: Array<any>;
 }
 
 export class AssignFormTemplateDto {
