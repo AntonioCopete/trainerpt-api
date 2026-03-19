@@ -643,16 +643,26 @@ export class FormsService {
    * This should be called by Cloud Scheduler daily
    */
   async processOverdueAssignments() {
+    // Obtener timestamp actual en UTC
+    // Nota: new Date() siempre devuelve UTC internamente,
+    // pero lo hacemos explícito para claridad
     const now = new Date();
 
-    // Find all pending assignments that are overdue and recurring
+    console.log(
+      `[CRON] Processing overdue assignments at ${now.toISOString()}`,
+    );
+
+    // Find all pending assignments that are overdue (one-off + recurring)
     const overdueAssignments = await this.prisma.formAssignment.findMany({
       where: {
         status: 'pending',
-        dueAt: { lt: now },
-        repeat: { not: 'none' },
+        dueAt: { lt: now }, // Prisma compara UTC con UTC automáticamente
       },
     });
+
+    console.log(
+      `[CRON] Found ${overdueAssignments.length} overdue assignments`,
+    );
 
     const results: Array<{
       id: string;
@@ -670,7 +680,6 @@ export class FormsService {
               id: assignment.id,
               status: 'pending',
               dueAt: { lt: now },
-              repeat: { not: 'none' },
             },
             data: { status: 'missed' },
           });
@@ -697,8 +706,10 @@ export class FormsService {
             return;
           }
 
-          // Create next recurring assignment
-          await this.createNextRecurringAssignment(tx, parent);
+          // Create next recurring assignment only for recurring cadence
+          if (parent.repeat !== 'none') {
+            await this.createNextRecurringAssignment(tx, parent);
+          }
         });
 
         results.push({ id: assignment.id, status: 'processed' });
@@ -714,7 +725,7 @@ export class FormsService {
     return {
       processed: results.filter((r) => r.status === 'processed').length,
       results,
-      timestamp: new Date().toISOString(),
+      timestamp: now.toISOString(), // Devolver en formato ISO UTC para claridad
     };
   }
 }

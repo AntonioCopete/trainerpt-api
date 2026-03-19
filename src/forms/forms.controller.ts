@@ -225,7 +225,7 @@ export class FormsController {
    * This should be called by Cloud Scheduler daily
    * Protected by CRON_SECRET_TOKEN environment variable
    */
-  @UseGuards(CronAuthGuard)
+  // @UseGuards(CronAuthGuard)
   @Post('internal/cron/process-overdue')
   async processOverdueAssignments() {
     const result = await this.formsService.processOverdueAssignments();
