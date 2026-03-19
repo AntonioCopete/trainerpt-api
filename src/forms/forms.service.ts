@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -264,8 +265,8 @@ export class FormsService {
     const dueAt = dto.dueAt ? this.toUtcEndOfDay(dto.dueAt) : null;
     const windowStart = dueAt
       ? new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS)
-      // 72 hours before
-      : null;
+      : // 72 hours before
+        null;
 
     const assignment = await this.prisma.formAssignment.create({
       data: {
@@ -334,8 +335,11 @@ export class FormsService {
       });
     }
 
+    // Caso "member view": no viene `memberId` ni `templateId` en query,
+    // así que asumimos que el usuario actual es el member.
+    // En esa vista ocultamos assignments cancelados (`archived`).
     return this.prisma.formAssignment.findMany({
-      where: { memberId: userId },
+      where: { memberId: userId, status: { not: 'archived' } },
       include: includeTemplate,
       orderBy: { createdAt: 'desc' },
     });
@@ -366,7 +370,59 @@ export class FormsService {
       );
     }
 
+    // Si el usuario es el member y el trainer lo canceló, ocultamos el assignment.
+    if (isMember && assignment.status === 'archived') {
+      throw new NotFoundException('Assignment not found');
+    }
+
     return assignment;
+  }
+
+  async cancelAssignment(
+    trainerId: string,
+    assignmentId: string,
+  ): Promise<{ cancelledCount: number }> {
+    const assignment = await this.prisma.formAssignment.findUnique({
+      where: { id: assignmentId },
+      select: {
+        id: true,
+        trainerId: true,
+        memberId: true,
+        templateId: true,
+      },
+    });
+
+    if (!assignment) {
+      throw new NotFoundException('Assignment not found');
+    }
+
+    if (assignment.trainerId !== trainerId) {
+      throw new ForbiddenException(
+        'You are not allowed to cancel this assignment',
+      );
+    }
+
+    if (!assignment.templateId) {
+      throw new BadRequestException(
+        'Cannot cancel this assignment because it is missing templateId',
+      );
+    }
+
+    // Cancelamos el pending actual para ese member + plantilla.
+    // Esto evita:
+    // - que el member pueda enviar (bloqueo por status archived)
+    // - que el cron o el flujo recurrente creen el siguiente (porque no habrá pending)
+    const res = await this.prisma.formAssignment.updateMany({
+      where: {
+        trainerId,
+        memberId: assignment.memberId,
+        templateId: assignment.templateId,
+        status: 'pending',
+      },
+      data: { status: 'archived' },
+    });
+
+    return { cancelledCount: res.count };
   }
 
   async submitAssignment(
@@ -381,6 +437,23 @@ export class FormsService {
 
       if (!assignment) {
         throw new NotFoundException('Assignment not found');
+      }
+
+      // Seguridad de flujo:
+      // Si el member se desvinculó del trainer, no permitir enviar
+      // ni disparar la creación del "siguiente" recurrente.
+      const link = await tx.trainerMemberLink.findUnique({
+        where: {
+          trainerId_memberId: {
+            trainerId: assignment.trainerId,
+            memberId,
+          },
+        },
+      });
+      if (!link) {
+        throw new ForbiddenException(
+          'Member is not linked to this trainer anymore',
+        );
       }
 
       const now = new Date();
@@ -404,6 +477,10 @@ export class FormsService {
 
       if (assignment.status === 'missed') {
         throw new ForbiddenException('Assignment already missed');
+      }
+
+      if (assignment.status === 'archived') {
+        throw new ForbiddenException('Assignment has been cancelled');
       }
 
       const response = await tx.formResponse.create({
@@ -438,10 +515,22 @@ export class FormsService {
       return;
     }
 
+    // Seguridad de flujo: si el member se desvinculó del trainer,
+    // no crear el siguiente recurrente.
+    const link = await tx.trainerMemberLink.findUnique({
+      where: {
+        trainerId_memberId: {
+          trainerId: parent.trainerId,
+          memberId: parent.memberId,
+        },
+      },
+    });
+    if (!link) {
+      return;
+    }
+
     const nextDueAt = this.calculateNextDueAt(parent.dueAt, parent.repeat);
-    const windowStart = new Date(
-      nextDueAt.getTime() - this.RESPONSE_WINDOW_MS,
-    );
+    const windowStart = new Date(nextDueAt.getTime() - this.RESPONSE_WINDOW_MS);
 
     await tx.formAssignment.create({
       data: {
@@ -490,9 +579,9 @@ export class FormsService {
     if (!assignment) {
       throw new NotFoundException('Assignment not found');
     }
-    if (assignment.status === 'completed') {
+    if (assignment.status === 'completed' || assignment.status === 'archived') {
       throw new ForbiddenException(
-        'Cannot upload files to a completed assignment',
+        'Cannot upload files to a completed or cancelled assignment',
       );
     }
     return this.s3Upload.getPresignedUploadUrl(

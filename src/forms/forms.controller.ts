@@ -207,6 +207,19 @@ export class FormsController {
     return { assignment };
   }
 
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('assignments/:assignmentId/cancel')
+  async cancelAssignment(
+    @CurrentUser() user: AuthUser,
+    @Param('assignmentId') assignmentId: string,
+  ) {
+    const result = await this.formsService.cancelAssignment(
+      user.id,
+      assignmentId,
+    );
+    return result;
+  }
+
   /**
    * Internal cron endpoint to process overdue recurring assignments
    * This should be called by Cloud Scheduler daily
