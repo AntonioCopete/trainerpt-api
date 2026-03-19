@@ -1,6 +1,6 @@
 import {
   IsArray,
-  IsDateString,
+  Matches,
   IsIn,
   IsNotEmpty,
   IsNumber,
@@ -47,7 +47,9 @@ export class AssignFormTemplateDto {
   memberId!: string;
 
   @IsOptional()
-  @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'dueAt must be a date in YYYY-MM-DD format',
+  })
   dueAt?: string;
 
   @IsOptional()

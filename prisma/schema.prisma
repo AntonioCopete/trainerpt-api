@@ -142,7 +142,7 @@ model FormAssignment {
 
   status         AssignmentStatus @default(pending)
   dueAt          DateTime?
-  windowStart    DateTime? // dueAt - 48h (when member can start responding)
+  windowStart    DateTime? // dueAt - 72h (when member can start responding)
   repeat         RepeatCadence    @default(none)
   nextDueAt      DateTime? // Deprecated, use parentAssignmentId chain instead
 

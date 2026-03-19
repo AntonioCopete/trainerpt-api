@@ -18,7 +18,7 @@ Los assignments recurrentes (weekly/monthly) ahora están completamente soportad
 
 **Esto garantiza que:**
 
-- Un assignment con `dueAt = "2026-03-20T23:59:59Z"` vence a las 23:59:59 UTC, sin importar dónde esté el servidor
+- Un assignment con `dueAt = "2026-03-20"` vence al fin de día UTC (23:59:59.999Z), sin importar dónde esté el servidor
 - Cloud Scheduler ejecuta a las 02:00 UTC si configuras `--time-zone=UTC`
 - No hay ambigüedad con cambios de horario de verano
 
@@ -33,7 +33,7 @@ Los assignments recurrentes (weekly/monthly) ahora están completamente soportad
 
 Para assignments recurrentes con `dueAt` definido:
 
-- **Window Start**: `dueAt - 48 horas` → Member puede empezar a responder
+- **Window Start**: `dueAt - 72 horas` → Member puede empezar a responder
 - **Due At**: Fecha límite DURA → Después de esto = missed
 - **No hay período de gracia después de dueAt**
 

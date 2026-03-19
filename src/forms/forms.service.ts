@@ -15,6 +15,10 @@ import { S3UploadService } from './s3-upload.service';
 
 @Injectable()
 export class FormsService {
+  // Tiempo previo (en horas) durante el cual el member puede empezar a responder.
+  // Interpretamos dueAt como fin de día UTC; por eso usamos UTC y un intervalo fijo en horas.
+  private readonly RESPONSE_WINDOW_MS = 72 * 60 * 60 * 1000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Upload: S3UploadService,
@@ -257,9 +261,10 @@ export class FormsService {
       );
     }
 
-    const dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
+    const dueAt = dto.dueAt ? this.toUtcEndOfDay(dto.dueAt) : null;
     const windowStart = dueAt
-      ? new Date(dueAt.getTime() - 48 * 60 * 60 * 1000) // 48 hours before
+      ? new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS)
+      // 72 hours before
       : null;
 
     const assignment = await this.prisma.formAssignment.create({
@@ -434,7 +439,9 @@ export class FormsService {
     }
 
     const nextDueAt = this.calculateNextDueAt(parent.dueAt, parent.repeat);
-    const windowStart = new Date(nextDueAt.getTime() - 48 * 60 * 60 * 1000);
+    const windowStart = new Date(
+      nextDueAt.getTime() - this.RESPONSE_WINDOW_MS,
+    );
 
     await tx.formAssignment.create({
       data: {
@@ -451,6 +458,12 @@ export class FormsService {
     });
   }
 
+  private toUtcEndOfDay(dateStr: string): Date {
+    // Frontend envia YYYY-MM-DD. Lo interpretamos como UTC "fin de día".
+    const [yyyy, mm, dd] = dateStr.split('-').map((v) => Number(v));
+    return new Date(Date.UTC(yyyy, mm - 1, dd, 23, 59, 59, 999));
+  }
+
   private calculateNextDueAt(currentDueAt: Date, repeat: string): Date {
     // Trabajar en UTC para evitar problemas de zona horaria
     const current = new Date(currentDueAt.toISOString());
@@ -461,6 +474,8 @@ export class FormsService {
       current.setUTCMonth(current.getUTCMonth() + 1);
     }
 
+    // Garantizar que siempre sea "fin de día" (para que el vencimiento sea por fecha)
+    current.setUTCHours(23, 59, 59, 999);
     return current;
   }
 
