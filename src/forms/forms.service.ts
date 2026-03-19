@@ -489,17 +489,24 @@ export class FormsService {
         throw new ForbiddenException('Assignment has been cancelled');
       }
 
+      // Evitar carreras: solo uno debe poder marcar como completed.
+      const completionUpdate = await tx.formAssignment.updateMany({
+        where: { id: assignmentId, memberId, status: 'pending' },
+        data: { status: 'completed' },
+      });
+
+      if (completionUpdate.count !== 1) {
+        throw new ForbiddenException(
+          'Assignment already processed by another request',
+        );
+      }
+
       const response = await tx.formResponse.create({
         data: {
           assignmentId,
           memberId,
           answers: dto.answers as any,
         },
-      });
-
-      await tx.formAssignment.update({
-        where: { id: assignmentId },
-        data: { status: 'completed' },
       });
 
       // 🔥 HÍBRIDO: Si es recurrente, crear el siguiente inmediatamente
@@ -532,6 +539,16 @@ export class FormsService {
       },
     });
     if (!link) {
+      return;
+    }
+
+    // Idempotencia ante pings/requests repetidos: no creemos otro hijo
+    // si ya existe uno para esta instancia (parentAssignmentId).
+    const existingChild = await tx.formAssignment.findFirst({
+      where: { parentAssignmentId: parent.id },
+      select: { id: true },
+    });
+    if (existingChild) {
       return;
     }
 
@@ -646,14 +663,42 @@ export class FormsService {
     for (const assignment of overdueAssignments) {
       try {
         await this.prisma.$transaction(async (tx) => {
-          // Mark as missed
-          await tx.formAssignment.update({
-            where: { id: assignment.id },
+          // Idempotencia / anti-race:
+          // Solo avanzamos si este assignment sigue exactamente en pending.
+          const missedUpdate = await tx.formAssignment.updateMany({
+            where: {
+              id: assignment.id,
+              status: 'pending',
+              dueAt: { lt: now },
+              repeat: { not: 'none' },
+            },
             data: { status: 'missed' },
           });
 
+          if (missedUpdate.count !== 1) {
+            return;
+          }
+
+          // Re-leer el parent dentro del tx para no depender de un snapshot viejo.
+          const parent = await tx.formAssignment.findUnique({
+            where: { id: assignment.id },
+            select: {
+              id: true,
+              dueAt: true,
+              repeat: true,
+              trainerId: true,
+              memberId: true,
+              templateId: true,
+              schemaSnapshot: true,
+            },
+          });
+
+          if (!parent) {
+            return;
+          }
+
           // Create next recurring assignment
-          await this.createNextRecurringAssignment(tx, assignment);
+          await this.createNextRecurringAssignment(tx, parent);
         });
 
         results.push({ id: assignment.id, status: 'processed' });
@@ -667,7 +712,7 @@ export class FormsService {
     }
 
     return {
-      processed: overdueAssignments.length,
+      processed: results.filter((r) => r.status === 'processed').length,
       results,
       timestamp: new Date().toISOString(),
     };
