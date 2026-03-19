@@ -23,6 +23,7 @@ enum UserRole {
 enum AssignmentStatus {
   pending
   completed
+  missed
   archived
 }
 
@@ -141,8 +142,12 @@ model FormAssignment {
 
   status         AssignmentStatus @default(pending)
   dueAt          DateTime?
+  windowStart    DateTime? // dueAt - 48h (when member can start responding)
   repeat         RepeatCadence    @default(none)
-  nextDueAt      DateTime?
+  nextDueAt      DateTime? // Deprecated, use parentAssignmentId chain instead
+
+  /// For recurring assignments, points to the previous assignment in the chain
+  parentAssignmentId String? @db.Uuid
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -152,10 +157,15 @@ model FormAssignment {
   template FormTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   responses FormResponse[]
+  
+  // Self-referential relation for recurring chain
+  parent   FormAssignment?  @relation("RecurringChain", fields: [parentAssignmentId], references: [id], onDelete: SetNull)
+  children FormAssignment[] @relation("RecurringChain")
 
   @@index([memberId, status])
   @@index([trainerId, createdAt])
   @@index([templateId])
+  @@index([status, dueAt]) // For cron job to find overdue assignments
 }
 
 model FormResponse {

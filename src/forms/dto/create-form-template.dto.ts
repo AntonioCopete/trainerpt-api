@@ -49,6 +49,10 @@ export class AssignFormTemplateDto {
   @IsOptional()
   @IsDateString()
   dueAt?: string;
+
+  @IsOptional()
+  @IsIn(['none', 'weekly', 'monthly'])
+  repeat?: 'none' | 'weekly' | 'monthly';
 }
 
 export class SubmitAssignmentDto {

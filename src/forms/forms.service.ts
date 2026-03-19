@@ -257,13 +257,20 @@ export class FormsService {
       );
     }
 
+    const dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
+    const windowStart = dueAt
+      ? new Date(dueAt.getTime() - 48 * 60 * 60 * 1000) // 48 hours before
+      : null;
+
     const assignment = await this.prisma.formAssignment.create({
       data: {
         trainerId,
         memberId: dto.memberId,
         templateId: template.id,
         schemaSnapshot: template.schema as any,
-        dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
+        dueAt,
+        windowStart,
+        repeat: dto.repeat || 'none',
       },
     });
 
@@ -371,8 +378,27 @@ export class FormsService {
         throw new NotFoundException('Assignment not found');
       }
 
+      const now = new Date();
+
+      // Validar ventana de respuesta
+      if (assignment.windowStart && now < assignment.windowStart) {
+        throw new ForbiddenException(
+          'Cannot submit assignment before window start',
+        );
+      }
+
+      // Validar deadline
+      if (assignment.dueAt && now > assignment.dueAt) {
+        throw new ForbiddenException('Assignment deadline has passed');
+      }
+
+      // Validar estado
       if (assignment.status === 'completed') {
         throw new ForbiddenException('Assignment already completed');
+      }
+
+      if (assignment.status === 'missed') {
+        throw new ForbiddenException('Assignment already missed');
       }
 
       const response = await tx.formResponse.create({
@@ -388,10 +414,54 @@ export class FormsService {
         data: { status: 'completed' },
       });
 
+      // 🔥 HÍBRIDO: Si es recurrente, crear el siguiente inmediatamente
+      if (assignment.repeat !== 'none') {
+        await this.createNextRecurringAssignment(tx, assignment);
+      }
+
       return response;
     });
 
     return result;
+  }
+
+  private async createNextRecurringAssignment(
+    tx: any,
+    parent: any,
+  ): Promise<void> {
+    if (!parent.dueAt || parent.repeat === 'none') {
+      return;
+    }
+
+    const nextDueAt = this.calculateNextDueAt(parent.dueAt, parent.repeat);
+    const windowStart = new Date(nextDueAt.getTime() - 48 * 60 * 60 * 1000);
+
+    await tx.formAssignment.create({
+      data: {
+        trainerId: parent.trainerId,
+        memberId: parent.memberId,
+        templateId: parent.templateId,
+        schemaSnapshot: parent.schemaSnapshot,
+        repeat: parent.repeat,
+        dueAt: nextDueAt,
+        windowStart,
+        parentAssignmentId: parent.id,
+        status: 'pending',
+      },
+    });
+  }
+
+  private calculateNextDueAt(currentDueAt: Date, repeat: string): Date {
+    // Trabajar en UTC para evitar problemas de zona horaria
+    const current = new Date(currentDueAt.toISOString());
+
+    if (repeat === 'weekly') {
+      current.setUTCDate(current.getUTCDate() + 7);
+    } else if (repeat === 'monthly') {
+      current.setUTCMonth(current.getUTCMonth() + 1);
+    }
+
+    return current;
   }
 
   async getPresignedUploadUrl(
@@ -439,5 +509,57 @@ export class FormsService {
       throw new ForbiddenException('You cannot access this photo');
     }
     return this.s3Upload.getPresignedReadUrl(key);
+  }
+
+  /**
+   * Cron job endpoint to process overdue assignments
+   * This should be called by Cloud Scheduler daily
+   */
+  async processOverdueAssignments() {
+    const now = new Date();
+
+    // Find all pending assignments that are overdue and recurring
+    const overdueAssignments = await this.prisma.formAssignment.findMany({
+      where: {
+        status: 'pending',
+        dueAt: { lt: now },
+        repeat: { not: 'none' },
+      },
+    });
+
+    const results: Array<{
+      id: string;
+      status: string;
+      error?: string;
+    }> = [];
+
+    for (const assignment of overdueAssignments) {
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          // Mark as missed
+          await tx.formAssignment.update({
+            where: { id: assignment.id },
+            data: { status: 'missed' },
+          });
+
+          // Create next recurring assignment
+          await this.createNextRecurringAssignment(tx, assignment);
+        });
+
+        results.push({ id: assignment.id, status: 'processed' });
+      } catch (error: any) {
+        results.push({
+          id: assignment.id,
+          status: 'error',
+          error: error.message,
+        });
+      }
+    }
+
+    return {
+      processed: overdueAssignments.length,
+      results,
+      timestamp: new Date().toISOString(),
+    };
   }
 }
