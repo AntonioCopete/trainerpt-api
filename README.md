@@ -1,8 +1,15 @@
 # TrainerPT Backend
 
+## 📚 Documentación
+
+- **[RECURRING-ASSIGNMENTS.md](./RECURRING-ASSIGNMENTS.md)** - Guía completa de assignments recurrentes y configuración de Cloud Scheduler
+- **[IMPLEMENTATION-SUMMARY.md](./IMPLEMENTATION-SUMMARY.md)** - Resumen de implementación de features recurrentes
+- **[ROBUSTNESS.md](./ROBUSTNESS.md)** - Mejoras de robustez implementadas
+
 ## Deploy automático con GitHub Actions
 
 Cada push a `main` ejecuta automáticamente:
+
 1. ✅ Migraciones de base de datos (1 sola vez)
 2. ✅ Deploy a Cloud Run
 
@@ -86,12 +93,14 @@ gcloud iam service-accounts keys create key.json \
 ```
 
 GitHub Secrets:
+
 ```
 DATABASE_URL    = postgresql://user:pass@host:5432/db
 GCP_SA_KEY      = (contenido completo del key.json)
 ```
 
 Y cambiar en `.github/workflows/deploy.yml`:
+
 ```yaml
 - uses: google-github-actions/auth@v2
   with:
@@ -111,9 +120,11 @@ GCS_BUCKET=trainerpt-dev
 ```
 
 Y en "Secrets":
+
 - `DATABASE_URL` → Reference secret `DATABASE_URL_PROD:latest`
 
 Y en "Security":
+
 - Service account: `trainerpt-api@PROJECT_ID.iam.gserviceaccount.com`
 
 ### 4. Crear secret DATABASE_URL en GCP Secret Manager (para Cloud Run)
@@ -143,6 +154,7 @@ git push origin main
 ```
 
 GitHub Actions automáticamente:
+
 - Ejecuta migraciones
 - Despliega a Cloud Run
 - Si algo falla, no despliega
@@ -153,7 +165,7 @@ GitHub Actions automáticamente:
 ✅ **Si migración falla, deploy se cancela** automáticamente  
 ✅ **Logs separados**: migraciones vs app  
 ✅ **Startup rápido**: contenedores solo inician el server  
-✅ **Zero race conditions**: solo 1 runner ejecuta migraciones  
+✅ **Zero race conditions**: solo 1 runner ejecuta migraciones
 
 ## Deploy manual (opcional)
 
