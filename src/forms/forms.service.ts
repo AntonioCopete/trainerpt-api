@@ -263,6 +263,12 @@ export class FormsService {
     }
 
     const dueAt = dto.dueAt ? this.toUtcEndOfDay(dto.dueAt) : null;
+    if (dueAt) {
+      const now = new Date();
+      if (dueAt.getTime() < now.getTime()) {
+        throw new BadRequestException('dueAt must be today or a future date');
+      }
+    }
     const windowStart = dueAt
       ? new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS)
       : // 72 hours before
