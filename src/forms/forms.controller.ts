@@ -20,7 +20,6 @@ import {
 import { SupabaseJwtGuard } from '../auth/supabase-jwt.guard';
 import { CurrentUser } from '../auth/current-user-decorator';
 import type { AuthUser } from '../auth/auth-user-type';
-import { CronAuthGuard } from '../common/guards/cron-auth.guard';
 
 @Controller('forms')
 export class FormsController {
@@ -225,7 +224,6 @@ export class FormsController {
    * This should be called by Cloud Scheduler daily
    * Protected by CRON_SECRET_TOKEN environment variable
    */
-  // @UseGuards(CronAuthGuard)
   @Post('internal/cron/process-overdue')
   async processOverdueAssignments() {
     const result = await this.formsService.processOverdueAssignments();
