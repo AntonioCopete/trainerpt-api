@@ -20,6 +20,7 @@ import {
 import { SupabaseJwtGuard } from '../auth/supabase-jwt.guard';
 import { CurrentUser } from '../auth/current-user-decorator';
 import type { AuthUser } from '../auth/auth-user-type';
+import { InternalJobAuthGuard } from '../common/guards/internal-job-auth.guard';
 
 @Controller('forms')
 export class FormsController {
@@ -224,9 +225,19 @@ export class FormsController {
    * This should be called by Cloud Scheduler daily
    * Protected by CRON_SECRET_TOKEN environment variable
    */
+  // @UseGuards(InternalJobAuthGuard)
   @Post('internal/cron/process-overdue')
   async processOverdueAssignments() {
     const result = await this.formsService.processOverdueAssignments();
+    return result;
+  }
+
+  // @UseGuards(InternalJobAuthGuard)
+  @Post('internal/jobs/sync-exercises')
+  async syncExercises() {
+    // Nota: este endpoint ejecuta un job pesado (fetch + traducción + upsert).
+    // Puede tardar varios minutos si no se limita por ENV.
+    const result = await this.formsService.syncExercisesFromFreeDb();
     return result;
   }
 }

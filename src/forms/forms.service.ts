@@ -13,6 +13,8 @@ import {
   PresignedUploadUrlDto,
 } from './dto/create-form-template.dto';
 import { S3UploadService } from './s3-upload.service';
+import { Prisma } from 'generated/prisma/client';
+import { TranslationService } from '../common/services/translation.service';
 
 @Injectable()
 export class FormsService {
@@ -23,6 +25,7 @@ export class FormsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Upload: S3UploadService,
+    private readonly translationService: TranslationService,
   ) {}
 
   async getTemplates(trainerId: string) {
@@ -726,6 +729,411 @@ export class FormsService {
       processed: results.filter((r) => r.status === 'processed').length,
       results,
       timestamp: now.toISOString(), // Devolver en formato ISO UTC para claridad
+    };
+  }
+  async syncExercisesFromFreeDb() {
+    type FreeExerciseItem = {
+      id?: string;
+      name?: string;
+      category?: string | null;
+      equipment?: string | null;
+      force?: string | null;
+      level?: string | null;
+      mechanic?: string | null;
+      primaryMuscles?: string[];
+      secondaryMuscles?: string[];
+      instructions?: string[];
+      images?: string[];
+    };
+
+    const datasetUrl =
+      process.env.FREE_EXERCISE_DB_URL ||
+      'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/dist/exercises.json';
+    const imageBaseUrl =
+      process.env.FREE_EXERCISE_DB_IMAGE_BASE_URL ||
+      'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
+    const maxItems = Number(process.env.EXERCISE_SYNC_MAX_ITEMS || 0);
+
+    const res = await fetch(datasetUrl);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new BadRequestException(
+        `Free exercise DB sync failed: ${res.status} ${res.statusText} - ${body}`,
+      );
+    }
+
+    const data = (await res.json()) as unknown;
+    if (!Array.isArray(data)) {
+      throw new BadRequestException(
+        'Free exercise DB payload must be an array',
+      );
+    }
+
+    const allItems = data as FreeExerciseItem[];
+    const items =
+      Number.isFinite(maxItems) && maxItems > 0
+        ? allItems.slice(0, maxItems)
+        : allItems;
+    let totalFetched = 0;
+    let totalUpserted = 0;
+    let totalSkipped = 0;
+    const skippedByReason: Record<string, number> = {};
+    const translationCache = new Map<string, string | null>();
+
+    const normalizeEsText = (value: string | null): string | null => {
+      if (!value) return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      const lowered = trimmed.toLowerCase();
+      if (lowered === 'null' || lowered === 'undefined' || lowered === 'n/a') {
+        return null;
+      }
+      return trimmed;
+    };
+
+    const capitalizeFirst = (value: string): string =>
+      value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+
+    const sanitizeEsArray = (values: string[] | null): string[] | null => {
+      if (!values || values.length === 0) return null;
+      const cleaned = values
+        .map((v) => normalizeEsText(v))
+        .filter((v): v is string => Boolean(v))
+        .map((v) => v.toLowerCase());
+      return cleaned.length > 0 ? cleaned : null;
+    };
+
+    // Traducciones canónicas de anatomía fitness (evita errores del traductor general).
+    const muscleMap: Record<string, string> = {
+      abdominals: 'abdominales',
+      abductors: 'abductores',
+      adductors: 'aductores',
+      biceps: 'bíceps',
+      calves: 'pantorrillas',
+      chest: 'pecho',
+      forearms: 'antebrazos',
+      glutes: 'glúteos',
+      hamstrings: 'isquiotibiales',
+      lats: 'dorsales',
+      'lower back': 'lumbar',
+      quadriceps: 'cuádriceps',
+      shoulders: 'hombros',
+      triceps: 'tríceps',
+      traps: 'trapecios',
+    };
+
+    const translateMuscleTerm = async (term: string): Promise<string> => {
+      const normalized = term.trim().toLowerCase();
+      if (!normalized) return term;
+      const canonical = muscleMap[normalized];
+      if (canonical) return canonical;
+      const translated = await translateCached(term);
+      return (translated || term).toLowerCase();
+    };
+
+    const translateCached = async (text: string): Promise<string | null> => {
+      const normalized = text.trim();
+      if (!normalized) return null;
+      const cacheKey = normalized.toLowerCase();
+      if (translationCache.has(cacheKey)) {
+        return translationCache.get(cacheKey) ?? null;
+      }
+
+      const translated = await this.translationService.translateText(
+        normalized,
+        {
+          to: 'es',
+        },
+      );
+      const trimmed = normalizeEsText(translated?.trim() || null);
+      const isSame =
+        trimmed !== null &&
+        trimmed.localeCompare(normalized, undefined, {
+          sensitivity: 'base',
+        }) === 0;
+      const finalText = !trimmed || isSame ? null : trimmed;
+
+      translationCache.set(cacheKey, finalText);
+      return finalText;
+    };
+
+    const toStablePositiveInt = (value: string) => {
+      let hash = 0;
+      for (let i = 0; i < value.length; i += 1) {
+        hash = (hash * 31 + value.charCodeAt(i)) | 0;
+      }
+      return Math.abs(hash) || 1;
+    };
+
+    for (const item of items) {
+      totalFetched += 1;
+      const name = item.name?.trim() || '';
+      const category = item.category?.trim() || null;
+      const instructions = Array.isArray(item.instructions)
+        ? item.instructions
+            .map((step) => (typeof step === 'string' ? step.trim() : ''))
+            .filter((step) => step.length > 0)
+        : [];
+
+      if (!name || !item.id) {
+        totalSkipped += 1;
+        const reason = !name ? 'invalid_name' : 'missing_id';
+        skippedByReason[reason] = (skippedByReason[reason] || 0) + 1;
+        continue;
+      }
+
+      const translatedNameRaw = await translateCached(name);
+      const translatedName = translatedNameRaw
+        ? capitalizeFirst(translatedNameRaw)
+        : null;
+
+      const translatedInstructionsRaw = await Promise.all(
+        instructions.map((step) => translateCached(step)),
+      );
+      const hasAnyInstructionTranslation = translatedInstructionsRaw.some((v) =>
+        Boolean(v),
+      );
+      const translatedInstructions = hasAnyInstructionTranslation
+        ? instructions.map(
+            (step, idx) => translatedInstructionsRaw[idx] || step,
+          )
+        : [];
+      const description = instructions.length > 0 ? instructions : null;
+      const translatedDescription = hasAnyInstructionTranslation
+        ? translatedInstructions.length > 0
+          ? translatedInstructions
+          : null
+        : description;
+      const legacyDescriptionText = description ? description.join('\n') : null;
+
+      const imageUrls = Array.isArray(item.images)
+        ? item.images
+            .map((path) => `${imageBaseUrl}${String(path).replace(/^\/+/, '')}`)
+            .filter(Boolean)
+        : [];
+
+      const equipment = item.equipment ? [item.equipment] : [];
+      const muscles = Array.isArray(item.primaryMuscles)
+        ? item.primaryMuscles
+        : [];
+      const musclesSecondary = Array.isArray(item.secondaryMuscles)
+        ? item.secondaryMuscles
+        : [];
+      const categoryNameEsRaw = category
+        ? await translateCached(category)
+        : null;
+      const categoryNameEs = categoryNameEsRaw
+        ? categoryNameEsRaw.toLowerCase()
+        : null;
+
+      const equipmentEsRaw =
+        equipment.length > 0
+          ? await Promise.all(equipment.map((value) => translateCached(value)))
+          : [];
+      const hasAnyEquipmentTranslation = equipmentEsRaw.some((v) => Boolean(v));
+      const rawEquipmentEs = hasAnyEquipmentTranslation
+        ? equipment.map((value, idx) => {
+            const translated = normalizeEsText(equipmentEsRaw[idx] || null);
+            const finalValue = translated || value;
+            return finalValue.toLowerCase();
+          })
+        : null;
+      const equipmentEs = sanitizeEsArray(rawEquipmentEs);
+
+      const musclesEsRaw =
+        muscles.length > 0
+          ? await Promise.all(
+              muscles.map((value) => translateMuscleTerm(value)),
+            )
+          : [];
+      const hasAnyMuscleTranslation = musclesEsRaw.some((v) => Boolean(v));
+      const rawMusclesEs = hasAnyMuscleTranslation
+        ? muscles.map((value, idx) => {
+            const translated = normalizeEsText(musclesEsRaw[idx] || null);
+            const finalValue = translated || value;
+            return finalValue.toLowerCase();
+          })
+        : null;
+      const musclesEs = sanitizeEsArray(rawMusclesEs);
+
+      const musclesSecondaryEsRaw =
+        musclesSecondary.length > 0
+          ? await Promise.all(
+              musclesSecondary.map((value) => translateMuscleTerm(value)),
+            )
+          : [];
+      const hasAnySecondaryMuscleTranslation = musclesSecondaryEsRaw.some((v) =>
+        Boolean(v),
+      );
+      const rawMusclesSecondaryEs = hasAnySecondaryMuscleTranslation
+        ? musclesSecondary.map((value, idx) => {
+            const translated = normalizeEsText(
+              musclesSecondaryEsRaw[idx] || null,
+            );
+            const finalValue = translated || value;
+            return finalValue.toLowerCase();
+          })
+        : null;
+      const musclesSecondaryEs = sanitizeEsArray(rawMusclesSecondaryEs);
+      const equipmentEsValue = equipmentEs
+        ? (equipmentEs as Prisma.InputJsonValue)
+        : Prisma.DbNull;
+      const musclesEsValue = musclesEs
+        ? (musclesEs as Prisma.InputJsonValue)
+        : Prisma.DbNull;
+      const musclesSecondaryEsValue = musclesSecondaryEs
+        ? (musclesSecondaryEs as Prisma.InputJsonValue)
+        : Prisma.DbNull;
+
+      const externalId = toStablePositiveInt(item.id);
+
+      const baseRaw = {
+        source: 'free-exercise-db',
+        author: 'free-exercise-db',
+        force: item.force ?? null,
+        level: item.level ?? null,
+        mechanic: item.mechanic ?? null,
+        original: item,
+      } as Prisma.InputJsonValue;
+
+      try {
+        await this.prisma.exercise.upsert({
+          where: {
+            source_externalId: {
+              source: 'free_exercise_db' as any,
+              externalId,
+            },
+          },
+          create: {
+            source: 'free_exercise_db' as any,
+            externalId,
+            externalUuid: item.id,
+            name,
+            nameEs: translatedName,
+            description: description as Prisma.InputJsonValue | null,
+            descriptionEs:
+              translatedDescription as Prisma.InputJsonValue | null,
+            categoryId: null,
+            categoryName: category,
+            categoryNameEs: categoryNameEs ?? null,
+            equipment: equipment as Prisma.InputJsonValue,
+            equipmentEs: equipmentEsValue,
+            muscles: muscles as Prisma.InputJsonValue,
+            musclesEs: musclesEsValue,
+            musclesSecondary: musclesSecondary as Prisma.InputJsonValue,
+            musclesSecondaryEs: musclesSecondaryEsValue,
+            images: imageUrls.map((url) => ({
+              image: url,
+            })) as Prisma.InputJsonValue,
+            videos: [] as Prisma.InputJsonValue,
+            license: Prisma.JsonNull,
+            lastUpdateAt: null,
+            lastUpdateGlobal: null,
+            raw: baseRaw,
+            isArchived: false,
+            deletedAt: null,
+          } as any,
+          update: {
+            externalUuid: item.id,
+            name,
+            nameEs: translatedName,
+            description: description as Prisma.InputJsonValue | null,
+            descriptionEs:
+              translatedDescription as Prisma.InputJsonValue | null,
+            categoryId: null,
+            categoryName: category,
+            categoryNameEs: categoryNameEs ?? null,
+            equipment: equipment as Prisma.InputJsonValue,
+            equipmentEs: equipmentEsValue,
+            muscles: muscles as Prisma.InputJsonValue,
+            musclesEs: musclesEsValue,
+            musclesSecondary: musclesSecondary as Prisma.InputJsonValue,
+            musclesSecondaryEs: musclesSecondaryEsValue,
+            images: imageUrls.map((url) => ({
+              image: url,
+            })) as Prisma.InputJsonValue,
+            videos: [] as Prisma.InputJsonValue,
+            license: Prisma.JsonNull,
+            lastUpdateAt: null,
+            lastUpdateGlobal: null,
+            raw: baseRaw,
+            isArchived: false,
+            deletedAt: null,
+          } as any,
+        });
+      } catch (error) {
+        const errorName =
+          typeof error === 'object' && error !== null && 'name' in error
+            ? String((error as { name?: unknown }).name || '')
+            : '';
+        const errorMessage =
+          typeof error === 'object' && error !== null && 'message' in error
+            ? String((error as { message?: unknown }).message || '')
+            : '';
+
+        const isDescriptionStringMismatch =
+          (errorName === 'PrismaClientValidationError' ||
+            errorMessage.includes('PrismaClientValidationError')) &&
+          errorMessage.includes(
+            'Argument `description`: Invalid value provided',
+          );
+        const isMissingColumn =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2022';
+        if (!isMissingColumn && !isDescriptionStringMismatch) throw error;
+
+        // Fallback para bases desalineadas: escribimos un subconjunto de columnas.
+        const existing = await this.prisma.exercise.findFirst({
+          where: { source: 'free_exercise_db' as any, externalId },
+          select: { id: true },
+        });
+        if (existing) {
+          await this.prisma.exercise.update({
+            where: { id: existing.id },
+            data: {
+              name,
+              description: legacyDescriptionText,
+              categoryName: category,
+              images: imageUrls.map((url) => ({
+                image: url,
+              })) as Prisma.InputJsonValue,
+              videos: [] as Prisma.InputJsonValue,
+              raw: baseRaw,
+              isArchived: false,
+              deletedAt: null,
+            } as any,
+          });
+        } else {
+          await this.prisma.exercise.create({
+            data: {
+              source: 'free_exercise_db' as any,
+              externalId,
+              name,
+              description: legacyDescriptionText,
+              categoryName: category,
+              images: imageUrls.map((url) => ({
+                image: url,
+              })) as Prisma.InputJsonValue,
+              videos: [] as Prisma.InputJsonValue,
+              raw: baseRaw,
+              isArchived: false,
+              deletedAt: null,
+            } as any,
+          });
+        }
+      }
+      totalUpserted += 1;
+    }
+
+    return {
+      ok: true,
+      source: 'free-exercise-db',
+      fetched: totalFetched,
+      upserted: totalUpserted,
+      skipped: totalSkipped,
+      skippedByReason,
+      maxItems: maxItems > 0 ? maxItems : null,
+      syncedAt: new Date().toISOString(),
     };
   }
 }
