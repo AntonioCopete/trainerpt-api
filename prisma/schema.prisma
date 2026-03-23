@@ -33,6 +33,19 @@ enum RepeatCadence {
   monthly
 }
 
+enum RoutineAssignmentStatus {
+  scheduled
+  active
+  expired
+  archived
+}
+
+enum ExerciseSource {
+  wger
+  free_exercise_db
+  custom
+}
+
 model User {
   /// Supabase auth.users.id (UUID)
   id        String   @id @db.Uuid
@@ -60,6 +73,10 @@ model User {
   formAssignmentsAsTrainer  FormAssignment[] @relation("AssignmentTrainer")
   formAssignmentsAsMember   FormAssignment[] @relation("AssignmentMember")
   formResponses             FormResponse[]
+  routineTemplates          RoutineTemplate[]   @relation("RoutineTemplateTrainer")
+  routineAssignmentsAsTrainer RoutineAssignment[] @relation("RoutineAssignmentTrainer")
+  routineAssignmentsAsMember  RoutineAssignment[] @relation("RoutineAssignmentMember")
+  customExercises           Exercise[] @relation("ExerciseCreator")
 
   // Index
   @@index([id])
@@ -183,5 +200,83 @@ model FormResponse {
 
   @@index([assignmentId, submittedAt])
   @@index([memberId, submittedAt])
+}
+
+model RoutineTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  trainerId   String   @db.Uuid
+  name        String   @db.VarChar(120)
+  description String   @db.VarChar(256)
+  schema      Json
+  isArchived  Boolean  @default(false)
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  trainer     User                @relation("RoutineTemplateTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  assignments RoutineAssignment[]
+
+  @@index([trainerId, isArchived, deletedAt])
+  @@index([trainerId])
+}
+
+model RoutineAssignment {
+  id             String                  @id @default(uuid()) @db.Uuid
+  trainerId      String                  @db.Uuid
+  memberId       String                  @db.Uuid
+  templateId     String?                 @db.Uuid
+  schemaSnapshot Json
+  startDate      DateTime
+  endDate        DateTime
+  status         RoutineAssignmentStatus @default(scheduled)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  trainer User            @relation("RoutineAssignmentTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  member  User            @relation("RoutineAssignmentMember", fields: [memberId], references: [id], onDelete: Cascade)
+  template RoutineTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([memberId, status, startDate, endDate])
+  @@index([trainerId, memberId, startDate, endDate])
+  @@index([templateId])
+}
+
+model Exercise {
+  id               String         @id @default(uuid()) @db.Uuid
+  source           ExerciseSource
+  externalId       Int?
+  trainerId        String?        @db.Uuid
+  externalUuid     String?        @db.VarChar(64)
+  name             String         @db.VarChar(255)
+  nameEs           String?        @db.VarChar(255)
+  description      Json?
+  descriptionEs    Json?
+  categoryId       Int?
+  categoryName     String?        @db.VarChar(120)
+  categoryNameEs   String?        @db.VarChar(120)
+  equipment        Json?
+  equipmentEs      Json?
+  muscles          Json?
+  musclesEs        Json?
+  musclesSecondary Json?
+  musclesSecondaryEs Json?
+  images           Json?
+  videos           Json?
+  license          Json?
+  lastUpdateAt     DateTime?
+  lastUpdateGlobal DateTime?
+  raw              Json
+  isArchived       Boolean        @default(false)
+  deletedAt        DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  trainer          User?          @relation("ExerciseCreator", fields: [trainerId], references: [id], onDelete: SetNull)
+
+  @@index([name])
+  @@index([categoryName])
+  @@index([trainerId])
+  @@index([source, externalId])
+  @@index([isArchived, deletedAt])
+  @@unique([source, externalId])
 }
 

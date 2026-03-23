@@ -85,6 +85,19 @@ export class MembersService {
         },
       });
 
+      await tx.routineAssignment.updateMany({
+        where: {
+          trainerId,
+          memberId,
+          status: {
+            not: 'archived',
+          },
+        },
+        data: {
+          status: 'archived',
+        },
+      });
+
       return {
         unlinked: true,
         cancelledCount: cancelled.count,
@@ -128,6 +141,19 @@ export class MembersService {
           trainerId,
           memberId,
           status: 'pending',
+        },
+        data: {
+          status: 'archived',
+        },
+      });
+
+      await tx.routineAssignment.updateMany({
+        where: {
+          trainerId,
+          memberId,
+          status: {
+            not: 'archived',
+          },
         },
         data: {
           status: 'archived',
