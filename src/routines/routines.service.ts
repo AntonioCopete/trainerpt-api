@@ -294,8 +294,136 @@ export class RoutinesService {
     };
   }
 
+  private mapExerciseForTemplateSchema(exercise: any) {
+    const raw = (exercise.raw ?? {}) as Record<string, unknown>;
+    const images = Array.isArray(exercise.images)
+      ? (exercise.images as Array<Record<string, unknown>>)
+      : [];
+    const videos = Array.isArray(exercise.videos)
+      ? (exercise.videos as Array<Record<string, unknown>>)
+      : [];
+    const esDescription = exercise.descriptionEs;
+    const esCategoryName = exercise.categoryNameEs;
+    const esName = exercise.nameEs;
+
+    const imageUrls = images
+      .map((img) =>
+        typeof img?.image === 'string'
+          ? img.image
+          : typeof img?.url === 'string'
+            ? img.url
+            : null,
+      )
+      .filter((value): value is string => Boolean(value));
+
+    const videoUrls = videos
+      .map((video) =>
+        typeof video?.video === 'string'
+          ? video.video
+          : typeof video?.url === 'string'
+            ? video.url
+            : null,
+      )
+      .filter((value): value is string => Boolean(value));
+
+    const customAuthor =
+      exercise.source === 'custom'
+        ? exercise.trainer?.fullName || exercise.trainer?.email || 'Trainer'
+        : null;
+    const datasetAuthor =
+      typeof raw.author === 'string' && raw.author.trim().length > 0
+        ? raw.author.trim()
+        : null;
+
+    return {
+      name: esName ?? exercise.name,
+      description: esDescription ?? exercise.description,
+      categoryName: esCategoryName ?? exercise.categoryName,
+      author: customAuthor ?? datasetAuthor,
+      license: exercise.license ?? null,
+      imageUrl: imageUrls[0] ?? null,
+      videoUrl: videoUrls[0] ?? null,
+      imageUrls,
+      videoUrls,
+      source: exercise.source,
+      trainerId: exercise.trainerId,
+      externalId: exercise.externalId,
+    };
+  }
+
+  private async hydrateTemplateSchema(trainerId: string, schema: unknown) {
+    if (!Array.isArray(schema) || schema.length === 0) return schema;
+
+    const items = schema as Array<Record<string, unknown>>;
+    const exerciseIds = Array.from(
+      new Set(
+        items
+          .map((item) =>
+            typeof item?.exerciseId === 'string' ? item.exerciseId : null,
+          )
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (exerciseIds.length === 0) return schema;
+
+    const exercises = await this.prisma.exercise.findMany({
+      where: {
+        id: { in: exerciseIds },
+        isArchived: false,
+        deletedAt: null,
+        OR: [
+          { source: 'wger' },
+          { source: 'free_exercise_db' as any },
+          { source: 'custom', trainerId },
+        ],
+      },
+      select: {
+        id: true,
+        source: true,
+        trainerId: true,
+        externalId: true,
+        name: true,
+        nameEs: true,
+        description: true,
+        descriptionEs: true,
+        categoryName: true,
+        categoryNameEs: true,
+        images: true,
+        videos: true,
+        license: true,
+        raw: true,
+        trainer: {
+          select: {
+            fullName: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    const exerciseById = new Map(
+      exercises.map((exercise) => [
+        exercise.id,
+        this.mapExerciseForTemplateSchema(exercise),
+      ]),
+    );
+
+    return items.map((item) => {
+      const exerciseId =
+        typeof item?.exerciseId === 'string' ? item.exerciseId : null;
+      if (!exerciseId) return item;
+      const hydrated = exerciseById.get(exerciseId);
+      if (!hydrated) return item;
+      return {
+        ...item,
+        ...hydrated,
+      };
+    });
+  }
+
   async getTemplates(trainerId: string) {
-    return this.prisma.routineTemplate.findMany({
+    const templates = await this.prisma.routineTemplate.findMany({
       where: {
         trainerId,
         isArchived: false,
@@ -303,6 +431,13 @@ export class RoutinesService {
       },
       orderBy: { updatedAt: 'desc' },
     });
+
+    return Promise.all(
+      templates.map(async (template) => ({
+        ...template,
+        schema: await this.hydrateTemplateSchema(trainerId, template.schema),
+      })),
+    );
   }
 
   async createTemplate(trainerId: string, dto: CreateRoutineTemplateDto) {
