@@ -15,6 +15,7 @@ import { SupabaseJwtGuard } from '../auth/supabase-jwt.guard';
 import {
   AssignRoutineTemplateDto,
   CreateCustomExerciseDto,
+  CreateCustomRoutineAssignmentDto,
   CreateRoutineTemplateDto,
   UpdateCustomExerciseDto,
   UpdateRoutineTemplateDto,
@@ -67,6 +68,13 @@ export class RoutinesController {
   }
 
   @UseGuards(SupabaseJwtGuard)
+  @Get('templates/archived')
+  async getArchivedTemplates(@CurrentUser() user: AuthUser) {
+    const templates = await this.routinesService.getArchivedTemplates(user.id);
+    return { templates };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
   @Post('templates')
   async createTemplate(
     @CurrentUser() user: AuthUser,
@@ -92,6 +100,36 @@ export class RoutinesController {
   }
 
   @UseGuards(SupabaseJwtGuard)
+  @Patch('templates/:templateId/archive')
+  async archiveTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.routinesService.archiveTemplate(user.id, templateId);
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('templates/:templateId/restore')
+  async restoreTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.routinesService.restoreTemplate(user.id, templateId);
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('templates/:templateId/delete')
+  async deleteTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.routinesService.deleteTemplate(user.id, templateId);
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
   @Post('templates/:templateId/assign')
   async assignTemplate(
     @CurrentUser() user: AuthUser,
@@ -101,6 +139,19 @@ export class RoutinesController {
     const assignment = await this.routinesService.assignTemplate(
       user.id,
       templateId,
+      dto,
+    );
+    return { assignment };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Post('assignments/custom')
+  async createCustomAssignment(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateCustomRoutineAssignmentDto,
+  ) {
+    const assignment = await this.routinesService.createCustomAssignment(
+      user.id,
       dto,
     );
     return { assignment };

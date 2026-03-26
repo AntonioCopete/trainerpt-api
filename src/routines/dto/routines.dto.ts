@@ -54,6 +54,33 @@ export class AssignRoutineTemplateDto {
   endDate!: string;
 }
 
+export class CreateCustomRoutineAssignmentDto {
+  @IsUUID()
+  memberId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  name!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  description!: string;
+
+  @IsArray()
+  @IsNotEmpty()
+  schema!: Array<any>;
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'startDate must be a date in YYYY-MM-DD format',
+  })
+  startDate!: string;
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'endDate must be a date in YYYY-MM-DD format',
+  })
+  endDate!: string;
+}
+
 export class CreateCustomExerciseDto {
   @IsString()
   @IsNotEmpty()

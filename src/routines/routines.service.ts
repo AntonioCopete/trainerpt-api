@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   AssignRoutineTemplateDto,
   CreateCustomExerciseDto,
+  CreateCustomRoutineAssignmentDto,
   CreateRoutineTemplateDto,
   UpdateCustomExerciseDto,
   UpdateRoutineTemplateDto,
@@ -23,6 +24,11 @@ type RoutineAssignmentLike = {
 @Injectable()
 export class RoutinesService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private nowUtc(): Date {
+    // Normalizamos explícitamente a un instante UTC.
+    return new Date(new Date().toISOString());
+  }
 
   private toDescriptionArray(value?: string): string[] | null {
     if (!value) return null;
@@ -281,7 +287,7 @@ export class RoutinesService {
   private getComputedStatus(assignment: RoutineAssignmentLike) {
     if (assignment.status === 'archived') return 'archived' as const;
 
-    const now = new Date();
+    const now = this.nowUtc();
     if (now < assignment.startDate) return 'scheduled' as const;
     if (now > assignment.endDate) return 'expired' as const;
     return 'active' as const;
@@ -294,14 +300,217 @@ export class RoutinesService {
     };
   }
 
+  private mapExerciseForTemplateSchema(exercise: any) {
+    const raw = (exercise.raw ?? {}) as Record<string, unknown>;
+    const images = Array.isArray(exercise.images)
+      ? (exercise.images as Array<Record<string, unknown>>)
+      : [];
+    const videos = Array.isArray(exercise.videos)
+      ? (exercise.videos as Array<Record<string, unknown>>)
+      : [];
+    const esDescription = exercise.descriptionEs;
+    const esCategoryName = exercise.categoryNameEs;
+    const esName = exercise.nameEs;
+
+    const imageUrls = images
+      .map((img) =>
+        typeof img?.image === 'string'
+          ? img.image
+          : typeof img?.url === 'string'
+            ? img.url
+            : null,
+      )
+      .filter((value): value is string => Boolean(value));
+
+    const videoUrls = videos
+      .map((video) =>
+        typeof video?.video === 'string'
+          ? video.video
+          : typeof video?.url === 'string'
+            ? video.url
+            : null,
+      )
+      .filter((value): value is string => Boolean(value));
+
+    const customAuthor =
+      exercise.source === 'custom'
+        ? exercise.trainer?.fullName || exercise.trainer?.email || 'Trainer'
+        : null;
+    const datasetAuthor =
+      typeof raw.author === 'string' && raw.author.trim().length > 0
+        ? raw.author.trim()
+        : null;
+
+    return {
+      name: esName ?? exercise.name,
+      description: esDescription ?? exercise.description,
+      categoryName: esCategoryName ?? exercise.categoryName,
+      author: customAuthor ?? datasetAuthor,
+      license: exercise.license ?? null,
+      imageUrl: imageUrls[0] ?? null,
+      videoUrl: videoUrls[0] ?? null,
+      imageUrls,
+      videoUrls,
+      source: exercise.source,
+      trainerId: exercise.trainerId,
+      externalId: exercise.externalId,
+    };
+  }
+
+  private async hydrateTemplateSchema(trainerId: string, schema: unknown) {
+    if (!Array.isArray(schema) || schema.length === 0) return schema;
+
+    const items = schema as Array<Record<string, unknown>>;
+    const exerciseIds = Array.from(
+      new Set(
+        items
+          .map((item) =>
+            typeof item?.exerciseId === 'string' ? item.exerciseId : null,
+          )
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (exerciseIds.length === 0) return schema;
+
+    const exercises = await this.prisma.exercise.findMany({
+      where: {
+        id: { in: exerciseIds },
+        isArchived: false,
+        deletedAt: null,
+        OR: [
+          { source: 'wger' },
+          { source: 'free_exercise_db' as any },
+          { source: 'custom', trainerId },
+        ],
+      },
+      select: {
+        id: true,
+        source: true,
+        trainerId: true,
+        externalId: true,
+        name: true,
+        nameEs: true,
+        description: true,
+        descriptionEs: true,
+        categoryName: true,
+        categoryNameEs: true,
+        images: true,
+        videos: true,
+        license: true,
+        raw: true,
+        trainer: {
+          select: {
+            fullName: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    const exerciseById = new Map(
+      exercises.map((exercise) => [
+        exercise.id,
+        this.mapExerciseForTemplateSchema(exercise),
+      ]),
+    );
+
+    return items.map((item) => {
+      const exerciseId =
+        typeof item?.exerciseId === 'string' ? item.exerciseId : null;
+      if (!exerciseId) return item;
+      const hydrated = exerciseById.get(exerciseId);
+      if (!hydrated) return item;
+      return {
+        ...item,
+        ...hydrated,
+      };
+    });
+  }
+
   async getTemplates(trainerId: string) {
-    return this.prisma.routineTemplate.findMany({
+    const templates = await this.prisma.routineTemplate.findMany({
       where: {
         trainerId,
         isArchived: false,
         deletedAt: null,
       },
       orderBy: { updatedAt: 'desc' },
+    });
+
+    return Promise.all(
+      templates.map(async (template) => ({
+        ...template,
+        schema: await this.hydrateTemplateSchema(trainerId, template.schema),
+      })),
+    );
+  }
+
+  async getArchivedTemplates(trainerId: string) {
+    return this.prisma.routineTemplate.findMany({
+      where: {
+        trainerId,
+        isArchived: true,
+        deletedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async archiveTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: false,
+      },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Routine template not found or already archived');
+    }
+    return this.prisma.routineTemplate.update({
+      where: { id: templateId },
+      data: { isArchived: true },
+    });
+  }
+
+  async restoreTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: true,
+      },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Routine template not found or not archived');
+    }
+    return this.prisma.routineTemplate.update({
+      where: { id: templateId },
+      data: { isArchived: false },
+    });
+  }
+
+  async deleteTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: true,
+      },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Routine template not found or not archived');
+    }
+    return this.prisma.routineTemplate.update({
+      where: { id: templateId },
+      data: { deletedAt: this.nowUtc() },
     });
   }
 
@@ -400,7 +609,7 @@ export class RoutinesService {
       );
     }
 
-    const now = new Date();
+    const now = this.nowUtc();
     let status: 'scheduled' | 'active' | 'expired' = 'scheduled';
     if (now < startDate) {
       status = 'scheduled';
@@ -428,6 +637,74 @@ export class RoutinesService {
             description: true,
           },
         },
+      },
+    });
+
+    return this.withComputedStatus(assignment);
+  }
+
+  async createCustomAssignment(
+    trainerId: string,
+    dto: CreateCustomRoutineAssignmentDto,
+  ) {
+    const link = await this.prisma.trainerMemberLink.findUnique({
+      where: {
+        trainerId_memberId: {
+          trainerId,
+          memberId: dto.memberId,
+        },
+      },
+    });
+    if (!link) {
+      throw new ForbiddenException('Member is not linked to trainer');
+    }
+
+    const startDate = this.toUtcStartOfDay(dto.startDate);
+    const endDate = this.toUtcEndOfDay(dto.endDate);
+    if (startDate > endDate) {
+      throw new BadRequestException(
+        'startDate must be before or equal to endDate',
+      );
+    }
+
+    const overlappingAssignment = await this.prisma.routineAssignment.findFirst(
+      {
+        where: {
+          trainerId,
+          memberId: dto.memberId,
+          status: { not: 'archived' },
+          startDate: { lte: endDate },
+          endDate: { gte: startDate },
+        },
+        select: { id: true },
+      },
+    );
+
+    if (overlappingAssignment) {
+      throw new BadRequestException(
+        'Member already has a routine assignment in this period',
+      );
+    }
+
+    const now = this.nowUtc();
+    let status: 'scheduled' | 'active' | 'expired' = 'scheduled';
+    if (now < startDate) {
+      status = 'scheduled';
+    } else if (now > endDate) {
+      status = 'expired';
+    } else {
+      status = 'active';
+    }
+
+    const assignment = await this.prisma.routineAssignment.create({
+      data: {
+        trainerId,
+        memberId: dto.memberId,
+        templateId: null,
+        schemaSnapshot: dto.schema as any,
+        startDate,
+        endDate,
+        status,
       },
     });
 
@@ -616,7 +893,17 @@ export class RoutinesService {
       (assignment) => this.getComputedStatus(assignment) === 'active',
     );
 
-    return active ? this.withComputedStatus(active) : null;
+    if (!active) return null;
+
+    const hydratedSchemaSnapshot = await this.hydrateTemplateSchema(
+      active.trainerId,
+      active.schemaSnapshot,
+    );
+
+    return this.withComputedStatus({
+      ...active,
+      schemaSnapshot: hydratedSchemaSnapshot,
+    });
   }
 
   async getMyHistory(memberId: string) {
