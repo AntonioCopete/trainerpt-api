@@ -15,6 +15,7 @@ import { SupabaseJwtGuard } from '../auth/supabase-jwt.guard';
 import {
   AssignRoutineTemplateDto,
   CreateCustomExerciseDto,
+  CreateCustomRoutineAssignmentDto,
   CreateRoutineTemplateDto,
   UpdateCustomExerciseDto,
   UpdateRoutineTemplateDto,
@@ -138,6 +139,19 @@ export class RoutinesController {
     const assignment = await this.routinesService.assignTemplate(
       user.id,
       templateId,
+      dto,
+    );
+    return { assignment };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Post('assignments/custom')
+  async createCustomAssignment(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateCustomRoutineAssignmentDto,
+  ) {
+    const assignment = await this.routinesService.createCustomAssignment(
+      user.id,
       dto,
     );
     return { assignment };

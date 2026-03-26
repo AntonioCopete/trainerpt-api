@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   AssignRoutineTemplateDto,
   CreateCustomExerciseDto,
+  CreateCustomRoutineAssignmentDto,
   CreateRoutineTemplateDto,
   UpdateCustomExerciseDto,
   UpdateRoutineTemplateDto,
@@ -636,6 +637,74 @@ export class RoutinesService {
             description: true,
           },
         },
+      },
+    });
+
+    return this.withComputedStatus(assignment);
+  }
+
+  async createCustomAssignment(
+    trainerId: string,
+    dto: CreateCustomRoutineAssignmentDto,
+  ) {
+    const link = await this.prisma.trainerMemberLink.findUnique({
+      where: {
+        trainerId_memberId: {
+          trainerId,
+          memberId: dto.memberId,
+        },
+      },
+    });
+    if (!link) {
+      throw new ForbiddenException('Member is not linked to trainer');
+    }
+
+    const startDate = this.toUtcStartOfDay(dto.startDate);
+    const endDate = this.toUtcEndOfDay(dto.endDate);
+    if (startDate > endDate) {
+      throw new BadRequestException(
+        'startDate must be before or equal to endDate',
+      );
+    }
+
+    const overlappingAssignment = await this.prisma.routineAssignment.findFirst(
+      {
+        where: {
+          trainerId,
+          memberId: dto.memberId,
+          status: { not: 'archived' },
+          startDate: { lte: endDate },
+          endDate: { gte: startDate },
+        },
+        select: { id: true },
+      },
+    );
+
+    if (overlappingAssignment) {
+      throw new BadRequestException(
+        'Member already has a routine assignment in this period',
+      );
+    }
+
+    const now = this.nowUtc();
+    let status: 'scheduled' | 'active' | 'expired' = 'scheduled';
+    if (now < startDate) {
+      status = 'scheduled';
+    } else if (now > endDate) {
+      status = 'expired';
+    } else {
+      status = 'active';
+    }
+
+    const assignment = await this.prisma.routineAssignment.create({
+      data: {
+        trainerId,
+        memberId: dto.memberId,
+        templateId: null,
+        schemaSnapshot: dto.schema as any,
+        startDate,
+        endDate,
+        status,
       },
     });
 
