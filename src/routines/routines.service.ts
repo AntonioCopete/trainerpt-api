@@ -24,6 +24,11 @@ type RoutineAssignmentLike = {
 export class RoutinesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private nowUtc(): Date {
+    // Normalizamos explícitamente a un instante UTC.
+    return new Date(new Date().toISOString());
+  }
+
   private toDescriptionArray(value?: string): string[] | null {
     if (!value) return null;
     const lines = value
@@ -281,7 +286,7 @@ export class RoutinesService {
   private getComputedStatus(assignment: RoutineAssignmentLike) {
     if (assignment.status === 'archived') return 'archived' as const;
 
-    const now = new Date();
+    const now = this.nowUtc();
     if (now < assignment.startDate) return 'scheduled' as const;
     if (now > assignment.endDate) return 'expired' as const;
     return 'active' as const;
@@ -440,6 +445,74 @@ export class RoutinesService {
     );
   }
 
+  async getArchivedTemplates(trainerId: string) {
+    return this.prisma.routineTemplate.findMany({
+      where: {
+        trainerId,
+        isArchived: true,
+        deletedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async archiveTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: false,
+      },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Routine template not found or already archived');
+    }
+    return this.prisma.routineTemplate.update({
+      where: { id: templateId },
+      data: { isArchived: true },
+    });
+  }
+
+  async restoreTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: true,
+      },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Routine template not found or not archived');
+    }
+    return this.prisma.routineTemplate.update({
+      where: { id: templateId },
+      data: { isArchived: false },
+    });
+  }
+
+  async deleteTemplate(trainerId: string, templateId: string) {
+    const template = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: true,
+      },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Routine template not found or not archived');
+    }
+    return this.prisma.routineTemplate.update({
+      where: { id: templateId },
+      data: { deletedAt: this.nowUtc() },
+    });
+  }
+
   async createTemplate(trainerId: string, dto: CreateRoutineTemplateDto) {
     return this.prisma.routineTemplate.create({
       data: {
@@ -535,7 +608,7 @@ export class RoutinesService {
       );
     }
 
-    const now = new Date();
+    const now = this.nowUtc();
     let status: 'scheduled' | 'active' | 'expired' = 'scheduled';
     if (now < startDate) {
       status = 'scheduled';
@@ -751,7 +824,17 @@ export class RoutinesService {
       (assignment) => this.getComputedStatus(assignment) === 'active',
     );
 
-    return active ? this.withComputedStatus(active) : null;
+    if (!active) return null;
+
+    const hydratedSchemaSnapshot = await this.hydrateTemplateSchema(
+      active.trainerId,
+      active.schemaSnapshot,
+    );
+
+    return this.withComputedStatus({
+      ...active,
+      schemaSnapshot: hydratedSchemaSnapshot,
+    });
   }
 
   async getMyHistory(memberId: string) {

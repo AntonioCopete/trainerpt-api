@@ -67,6 +67,13 @@ export class RoutinesController {
   }
 
   @UseGuards(SupabaseJwtGuard)
+  @Get('templates/archived')
+  async getArchivedTemplates(@CurrentUser() user: AuthUser) {
+    const templates = await this.routinesService.getArchivedTemplates(user.id);
+    return { templates };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
   @Post('templates')
   async createTemplate(
     @CurrentUser() user: AuthUser,
@@ -88,6 +95,36 @@ export class RoutinesController {
       templateId,
       dto,
     );
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('templates/:templateId/archive')
+  async archiveTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.routinesService.archiveTemplate(user.id, templateId);
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('templates/:templateId/restore')
+  async restoreTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.routinesService.restoreTemplate(user.id, templateId);
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Patch('templates/:templateId/delete')
+  async deleteTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+  ) {
+    const template = await this.routinesService.deleteTemplate(user.id, templateId);
     return { template };
   }
 
