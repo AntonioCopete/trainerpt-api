@@ -218,6 +218,7 @@ export class SubscriptionsService {
           quantity: 1,
         },
       ],
+      allow_promotion_codes: true,
       mode: 'subscription',
       success_url: `${webUrl}/trainer/billing?success=true`,
       cancel_url: `${webUrl}/trainer/billing?canceled=true`,
@@ -467,15 +468,22 @@ export class SubscriptionsService {
       where: { stripeSubscriptionId: subscription.id },
     });
 
-    console.log('[Webhook] Found subscription to delete:', currentSub ? {
-      id: currentSub.id,
-      plan: currentSub.plan,
-      status: currentSub.status,
-      userId: currentSub.userId,
-    } : 'NOT FOUND');
+    console.log(
+      '[Webhook] Found subscription to delete:',
+      currentSub
+        ? {
+            id: currentSub.id,
+            plan: currentSub.plan,
+            status: currentSub.status,
+            userId: currentSub.userId,
+          }
+        : 'NOT FOUND',
+    );
 
     if (currentSub) {
-      console.log('[Webhook] Marking subscription as EXPIRED and creating FREE plan...');
+      console.log(
+        '[Webhook] Marking subscription as EXPIRED and creating FREE plan...',
+      );
 
       await this.prisma.subscription.update({
         where: { id: currentSub.id },
@@ -496,7 +504,9 @@ export class SubscriptionsService {
         },
       });
 
-      console.log('[Webhook] Subscription marked as EXPIRED and FREE plan created');
+      console.log(
+        '[Webhook] Subscription marked as EXPIRED and FREE plan created',
+      );
     } else {
       console.log('[Webhook] No subscription found, skipping');
     }
