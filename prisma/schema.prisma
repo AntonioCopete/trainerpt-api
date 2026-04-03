@@ -297,6 +297,19 @@ model Exercise {
   @@unique([source, externalId])
 }
 
+model Muscle {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(100)
+  nameEs    String   @db.VarChar(100)
+  order     Int      @default(0)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([nameEs])
+}
+
 model Subscription {
   id                   String   @id @default(uuid()) @db.Uuid
   userId               String   @db.Uuid

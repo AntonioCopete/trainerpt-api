@@ -39,8 +39,106 @@ export class RoutinesService {
     return lines.length > 0 ? lines : null;
   }
 
+  /** Normalize JSON muscle fields (strings, {name}, free_exercise_db raw.original, etc.) */
+  private extractMuscleStrings(json: unknown): string[] {
+    if (json == null) return [];
+    if (Array.isArray(json)) {
+      return json.flatMap((entry) => {
+        if (typeof entry === 'string') {
+          const t = entry.trim();
+          return t ? [t] : [];
+        }
+        if (entry && typeof entry === 'object') {
+          const o = entry as Record<string, unknown>;
+          for (const key of [
+            'nameEs',
+            'name_es',
+            'nameEn',
+            'name_en',
+            'name',
+            'label',
+            'muscleName',
+          ]) {
+            const v = o[key];
+            if (typeof v === 'string' && v.trim()) return [v.trim()];
+          }
+        }
+        return [];
+      });
+    }
+    return [];
+  }
+
+  private extractMusclesFromRaw(raw: Record<string, unknown>): {
+    primary: string[];
+    secondary: string[];
+  } {
+    const original = raw?.original as Record<string, unknown> | undefined;
+    const primary =
+      original && Array.isArray(original.primaryMuscles)
+        ? (original.primaryMuscles as unknown[]).filter(
+            (x): x is string => typeof x === 'string' && x.trim().length > 0,
+          )
+        : [];
+    const secondary =
+      original && Array.isArray(original.secondaryMuscles)
+        ? (original.secondaryMuscles as unknown[]).filter(
+            (x): x is string => typeof x === 'string' && x.trim().length > 0,
+          )
+        : [];
+    return { primary, secondary };
+  }
+
+  private mergeUniqueMuscleLabels(...lists: string[][]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const list of lists) {
+      for (const s of list) {
+        const t = s.trim();
+        if (!t) continue;
+        const key = t.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Una sola lengua en UI: si hay músculos en *_es, solo esos; si no, inglés + raw.
+   * Evita duplicar "chest" y "pectoral" a la vez.
+   */
+  private buildMuscleLabels(
+    esJson: unknown,
+    enJson: unknown,
+    fromRaw: string[],
+  ): string[] {
+    const es = this.extractMuscleStrings(esJson);
+    if (es.length > 0) {
+      return this.mergeUniqueMuscleLabels(es);
+    }
+    return this.mergeUniqueMuscleLabels(
+      this.extractMuscleStrings(enJson),
+      fromRaw,
+    );
+  }
+
   async getExercises(userId: string, search?: string) {
     const q = search?.trim();
+    
+    // Build search conditions
+    const searchConditions = q ? {
+      OR: [
+        // Search by name (Spanish and English)
+        { nameEs: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+        { name: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+        // Search by category
+        { categoryNameEs: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+        { categoryName: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+      ]
+    } : {};
+
     const exercises = await this.prisma.exercise.findMany({
       where: {
         isArchived: false,
@@ -50,6 +148,7 @@ export class RoutinesService {
           { source: 'free_exercise_db' as any },
           { source: 'custom', trainerId: userId },
         ],
+        ...searchConditions,
       },
       select: {
         id: true,
@@ -129,6 +228,18 @@ export class RoutinesService {
           ? raw.author.trim()
           : null;
 
+      const fromRaw = this.extractMusclesFromRaw(raw);
+      const muscleLabelsPrimary = this.buildMuscleLabels(
+        esMuscles,
+        (exercise as any).muscles,
+        fromRaw.primary,
+      );
+      const muscleLabelsSecondary = this.buildMuscleLabels(
+        esMusclesSecondary,
+        (exercise as any).musclesSecondary,
+        fromRaw.secondary,
+      );
+
       return {
         ...exercise,
         // Priorizar columnas *_es, pero mantener key names estándar para el frontend.
@@ -139,6 +250,8 @@ export class RoutinesService {
         muscles: esMuscles ?? (exercise as any).muscles,
         musclesSecondary:
           esMusclesSecondary ?? (exercise as any).musclesSecondary,
+        muscleLabelsPrimary,
+        muscleLabelsSecondary,
         author: customAuthor ?? datasetAuthor,
         license: exercise.license ?? null,
         imageUrl,
@@ -148,34 +261,42 @@ export class RoutinesService {
       };
     });
 
-    if (!q) return mapped;
+    if (!q) {
+      return mapped;
+    }
 
-    const query = q.toLowerCase();
-    const includesQuery = (value: unknown): boolean =>
-      typeof value === 'string' && value.toLowerCase().includes(query);
-
-    const includesQueryInArray = (value: unknown): boolean =>
-      Array.isArray(value) &&
-      value.some(
-        (entry) =>
-          typeof entry === 'string' && entry.toLowerCase().includes(query),
-      );
-
+    const lowerQ = q.toLowerCase();
     return mapped.filter((exercise) => {
+      const matchedByBasic =
+        exercise.name?.toLowerCase().includes(lowerQ) ||
+        exercise.categoryName?.toLowerCase().includes(lowerQ) ||
+        (typeof (exercise as any).author === 'string' &&
+          (exercise as any).author.toLowerCase().includes(lowerQ));
+
+      if (matchedByBasic) return true;
+
+      const muscleHaystack = [
+        ...(exercise as any).muscleLabelsPrimary,
+        ...(exercise as any).muscleLabelsSecondary,
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (muscleHaystack.includes(lowerQ)) return true;
+
+      const includesQueryInArray = (value: unknown): boolean =>
+        Array.isArray(value) &&
+        value.some(
+          (entry) =>
+            typeof entry === 'string' && entry.toLowerCase().includes(lowerQ),
+        );
+
       return (
-        includesQuery(exercise.name) ||
-        includesQuery((exercise as any).nameEs) ||
-        includesQuery(exercise.categoryName) ||
-        includesQuery((exercise as any).categoryNameEs) ||
-        includesQuery((exercise as any).author) ||
         includesQueryInArray((exercise as any).muscles) ||
         includesQueryInArray((exercise as any).musclesEs) ||
         includesQueryInArray((exercise as any).musclesSecondary) ||
         includesQueryInArray((exercise as any).musclesSecondaryEs) ||
         includesQueryInArray((exercise as any).equipment) ||
-        includesQueryInArray((exercise as any).equipmentEs) ||
-        includesQueryInArray((exercise as any).description) ||
-        includesQueryInArray((exercise as any).descriptionEs)
+        includesQueryInArray((exercise as any).equipmentEs)
       );
     });
   }

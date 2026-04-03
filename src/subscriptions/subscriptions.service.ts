@@ -458,11 +458,25 @@ export class SubscriptionsService {
     subscription: StripeSubscription,
     eventId: string,
   ): Promise<void> {
+    console.log('[Webhook] handleSubscriptionDeleted called', {
+      subscriptionId: subscription.id,
+      eventId,
+    });
+
     const currentSub = await this.prisma.subscription.findFirst({
       where: { stripeSubscriptionId: subscription.id },
     });
 
+    console.log('[Webhook] Found subscription to delete:', currentSub ? {
+      id: currentSub.id,
+      plan: currentSub.plan,
+      status: currentSub.status,
+      userId: currentSub.userId,
+    } : 'NOT FOUND');
+
     if (currentSub) {
+      console.log('[Webhook] Marking subscription as EXPIRED and creating FREE plan...');
+
       await this.prisma.subscription.update({
         where: { id: currentSub.id },
         data: {
@@ -481,6 +495,10 @@ export class SubscriptionsService {
           startedAt: new Date(),
         },
       });
+
+      console.log('[Webhook] Subscription marked as EXPIRED and FREE plan created');
+    } else {
+      console.log('[Webhook] No subscription found, skipping');
     }
   }
 
