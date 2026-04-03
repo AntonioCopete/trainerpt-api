@@ -181,3 +181,10 @@ gcloud run deploy trainerpt-prod-api \
   --region europe-west1 \
   --allow-unauthenticated
 ```
+
+## Stripe
+
+Development
+Install stripe cli
+stripe login
+stripe listen --forward-to http://localhost:3000/subscriptions/webhook

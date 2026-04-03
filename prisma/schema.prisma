@@ -46,6 +46,21 @@ enum ExerciseSource {
   custom
 }
 
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  PRO
+  ELITE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  INACTIVE
+  CANCELED
+  EXPIRED
+  PAST_DUE
+}
+
 model User {
   /// Supabase auth.users.id (UUID)
   id        String   @id @db.Uuid
@@ -77,6 +92,8 @@ model User {
   routineAssignmentsAsTrainer RoutineAssignment[] @relation("RoutineAssignmentTrainer")
   routineAssignmentsAsMember  RoutineAssignment[] @relation("RoutineAssignmentMember")
   customExercises           Exercise[] @relation("ExerciseCreator")
+  
+  subscriptions             Subscription[]
 
   // Index
   @@index([id])
@@ -278,5 +295,28 @@ model Exercise {
   @@index([source, externalId])
   @@index([isArchived, deletedAt])
   @@unique([source, externalId])
+}
+
+model Subscription {
+  id                   String   @id @default(uuid()) @db.Uuid
+  userId               String   @db.Uuid
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  plan                 SubscriptionPlan
+  status               SubscriptionStatus
+  
+  stripeCustomerId     String?  @db.VarChar(255)
+  stripeSubscriptionId String?  @db.VarChar(255)
+  stripeEventId        String?  @db.VarChar(255)
+  
+  startedAt            DateTime @default(now())
+  endsAt               DateTime?
+  canceledAt           DateTime?
+  
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  
+  @@index([userId, status])
+  @@index([stripeEventId])
 }
 

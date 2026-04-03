@@ -8,6 +8,7 @@ import { FormsModule } from './forms/forms.module';
 import { InvitesModule } from './invites/invites.module';
 import { MembersModule } from './members/members.module';
 import { RoutinesModule } from './routines/routines.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -28,6 +29,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     InvitesModule,
     MembersModule,
     RoutinesModule,
+    SubscriptionsModule,
   ],
   controllers: [AppController],
   providers: [
