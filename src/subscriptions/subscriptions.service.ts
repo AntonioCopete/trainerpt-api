@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import Stripe from 'stripe';
@@ -22,7 +26,11 @@ interface StripeCheckoutSession {
 
 interface StripeSubscription {
   id: string;
+  status: string; // Stripe subscription status: 'active', 'canceled', 'incomplete', 'past_due', etc.
   metadata?: Record<string, string | null>;
+  cancel_at_period_end?: boolean;
+  canceled_at?: number | null;
+  current_period_end?: number;
 }
 
 interface StripeInvoice {
@@ -54,22 +62,79 @@ export class SubscriptionsService {
   }
 
   async getCurrentSubscription(userId: string) {
+    // First, expire any canceled subscriptions that passed their endsAt date
+    await this.expireCanceledSubscriptions(userId);
+
     return this.prisma.subscription.findFirst({
       where: {
         userId,
-        status: SubscriptionStatus.ACTIVE,
         OR: [
-          { endsAt: null },
-          { endsAt: { gt: new Date() } },
+          // Active subscription
+          {
+            status: SubscriptionStatus.ACTIVE,
+          },
+          // Canceled but still valid until endsAt
+          {
+            status: SubscriptionStatus.CANCELED,
+            endsAt: { gt: new Date() }, // Comparison in UTC
+          },
         ],
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async getSubscriptionWithUsage(userId: string): Promise<SubscriptionWithUsageDto> {
+  private async expireCanceledSubscriptions(userId: string): Promise<void> {
+    const expiredSubs = await this.prisma.subscription.findMany({
+      where: {
+        userId,
+        status: SubscriptionStatus.CANCELED,
+        endsAt: {
+          lte: new Date(), // Comparison in UTC (new Date() is always UTC internally)
+        },
+      },
+    });
+
+    if (expiredSubs.length > 0) {
+      // Mark as expired
+      await this.prisma.subscription.updateMany({
+        where: {
+          userId,
+          status: SubscriptionStatus.CANCELED,
+          endsAt: {
+            lte: new Date(), // UTC comparison
+          },
+        },
+        data: {
+          status: SubscriptionStatus.EXPIRED,
+        },
+      });
+
+      // Create FREE subscription if user doesn't have an active one
+      const hasActiveSub = await this.prisma.subscription.findFirst({
+        where: {
+          userId,
+          status: SubscriptionStatus.ACTIVE,
+        },
+      });
+
+      if (!hasActiveSub) {
+        await this.prisma.subscription.create({
+          data: {
+            userId,
+            plan: SubscriptionPlan.FREE,
+            status: SubscriptionStatus.ACTIVE,
+          },
+        });
+      }
+    }
+  }
+
+  async getSubscriptionWithUsage(
+    userId: string,
+  ): Promise<SubscriptionWithUsageDto> {
     const subscription = await this.getCurrentSubscription(userId);
-    
+
     if (!subscription) {
       throw new BadRequestException('No active subscription found');
     }
@@ -103,9 +168,14 @@ export class SubscriptionsService {
     });
   }
 
-  async createCheckoutSession(userId: string, plan: SubscriptionPlan): Promise<string> {
+  async createCheckoutSession(
+    userId: string,
+    plan: SubscriptionPlan,
+  ): Promise<string> {
     if (plan === SubscriptionPlan.FREE) {
-      throw new BadRequestException('Cannot create checkout session for FREE plan');
+      throw new BadRequestException(
+        'Cannot create checkout session for FREE plan',
+      );
     }
 
     const priceIdKey = `STRIPE_PRICE_ID_${plan}`;
@@ -136,7 +206,8 @@ export class SubscriptionsService {
       customerId = customer.id;
     }
 
-    const webUrl = this.configService.get<string>('WEB_URL') || 'http://localhost:3000';
+    const webUrl =
+      this.configService.get<string>('WEB_URL') || 'http://localhost:3000';
 
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
@@ -166,7 +237,8 @@ export class SubscriptionsService {
       throw new BadRequestException('No Stripe customer found');
     }
 
-    const webUrl = this.configService.get<string>('WEB_URL') || 'http://localhost:3000';
+    const webUrl =
+      this.configService.get<string>('WEB_URL') || 'http://localhost:3000';
 
     const session = await this.stripe.billingPortal.sessions.create({
       customer: subscription.stripeCustomerId,
@@ -177,40 +249,66 @@ export class SubscriptionsService {
   }
 
   async handleWebhookEvent(event: StripeEvent): Promise<void> {
+    console.log('[Webhook] Received event:', {
+      id: event.id,
+      type: event.type,
+    });
+
     // Check for duplicate events
     const existingEvent = await this.prisma.subscription.findFirst({
       where: { stripeEventId: event.id },
     });
 
     if (existingEvent) {
+      console.log('[Webhook] Event already processed, skipping:', event.id);
       // Already processed, skip
       return;
     }
 
+    console.log('[Webhook] Processing new event:', event.type);
+
     switch (event.type) {
       case 'checkout.session.completed':
-        await this.handleCheckoutCompleted(event.data.object as StripeCheckoutSession, event.id);
+        await this.handleCheckoutCompleted(
+          event.data.object as StripeCheckoutSession,
+          event.id,
+        );
         break;
 
       case 'customer.subscription.updated':
-        await this.handleSubscriptionUpdated(event.data.object as StripeSubscription, event.id);
+        await this.handleSubscriptionUpdated(
+          event.data.object as StripeSubscription,
+          event.id,
+        );
         break;
 
       case 'customer.subscription.deleted':
-        await this.handleSubscriptionDeleted(event.data.object as StripeSubscription, event.id);
+        await this.handleSubscriptionDeleted(
+          event.data.object as StripeSubscription,
+          event.id,
+        );
         break;
 
       case 'invoice.payment_failed':
-        await this.handlePaymentFailed(event.data.object as StripeInvoice, event.id);
+        await this.handlePaymentFailed(
+          event.data.object as StripeInvoice,
+          event.id,
+        );
         break;
 
       default:
+        console.log('[Webhook] Unhandled event type:', event.type);
         // Unhandled event type
         break;
     }
+
+    console.log('[Webhook] Event processing complete:', event.id);
   }
 
-  private async handleCheckoutCompleted(session: StripeCheckoutSession, eventId: string): Promise<void> {
+  private async handleCheckoutCompleted(
+    session: StripeCheckoutSession,
+    eventId: string,
+  ): Promise<void> {
     const userId = session.metadata?.userId;
     const plan = session.metadata?.plan as SubscriptionPlan;
 
@@ -221,21 +319,145 @@ export class SubscriptionsService {
     const stripeSubscriptionId = session.subscription as string;
     const stripeCustomerId = session.customer as string;
 
-    await this.transitionSubscription(userId, plan, stripeCustomerId, stripeSubscriptionId, eventId);
+    await this.transitionSubscription(
+      userId,
+      plan,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      eventId,
+    );
   }
 
-  private async handleSubscriptionUpdated(subscription: StripeSubscription, eventId: string): Promise<void> {
-    const userId = subscription.metadata?.userId;
+  private async handleSubscriptionUpdated(
+    subscription: StripeSubscription,
+    eventId: string,
+  ): Promise<void> {
+    console.log('[Webhook] handleSubscriptionUpdated called', {
+      subscriptionId: subscription.id,
+      stripeStatus: subscription.status,
+      cancel_at_period_end: subscription.cancel_at_period_end,
+      canceled_at: subscription.canceled_at,
+      current_period_end: subscription.current_period_end,
+    });
 
-    if (!userId) {
+    // Find current subscription by Stripe subscription ID
+    const currentSub = await this.prisma.subscription.findFirst({
+      where: { stripeSubscriptionId: subscription.id },
+    });
+
+    console.log(
+      '[Webhook] Found subscription in DB:',
+      currentSub
+        ? {
+            id: currentSub.id,
+            plan: currentSub.plan,
+            status: currentSub.status,
+            stripeSubscriptionId: currentSub.stripeSubscriptionId,
+          }
+        : 'NOT FOUND',
+    );
+
+    if (!currentSub) {
+      console.log('[Webhook] No subscription found in DB, skipping update');
       return;
     }
 
-    // Handle subscription changes (e.g., plan upgrades/downgrades)
-    // This could be extended to handle more complex scenarios
+    // Map Stripe status to our status
+    let newStatus: SubscriptionStatus | null = null;
+    let canceledAt: Date | null = null;
+    let endsAt: Date | null = null;
+
+    // Stripe status: 'active' can mean two things:
+    // 1. Active and will renew (cancel_at_period_end = false)
+    // 2. Active but will cancel at period end (cancel_at_period_end = true)
+    if (subscription.status === 'active') {
+      if (subscription.cancel_at_period_end) {
+        // User requested cancellation, but subscription is still active until period end
+        console.log(
+          '[Webhook] Subscription is active but will cancel at period end',
+        );
+        newStatus = SubscriptionStatus.CANCELED;
+
+        if (subscription.canceled_at) {
+          canceledAt = new Date(subscription.canceled_at * 1000);
+        }
+
+        if (subscription.current_period_end) {
+          endsAt = new Date(subscription.current_period_end * 1000);
+        } else if (!endsAt) {
+          // Fetch from Stripe as fallback
+          console.log(
+            '[Webhook] Fetching subscription details from Stripe for endsAt...',
+          );
+          try {
+            const stripeSubscription = await this.stripe.subscriptions.retrieve(
+              subscription.id,
+            );
+            if (stripeSubscription.current_period_end) {
+              endsAt = new Date(stripeSubscription.current_period_end * 1000);
+            }
+          } catch (error) {
+            console.error(
+              '[Webhook] Failed to fetch subscription from Stripe:',
+              error,
+            );
+          }
+        }
+      } else {
+        // Subscription is active and will renew
+        console.log('[Webhook] Subscription is active and will renew');
+        newStatus = SubscriptionStatus.ACTIVE;
+        canceledAt = null;
+        endsAt = null;
+      }
+    }
+    // Stripe status: 'canceled' means the subscription has ended
+    else if (subscription.status === 'canceled') {
+      console.log('[Webhook] Subscription is canceled (ended)');
+      newStatus = SubscriptionStatus.EXPIRED;
+      endsAt = new Date(); // Already ended
+    }
+    // Stripe status: 'past_due' means payment failed
+    else if (subscription.status === 'past_due') {
+      console.log('[Webhook] Subscription is past due');
+      newStatus = SubscriptionStatus.PAST_DUE;
+    }
+    // Other statuses (incomplete, trialing, etc.) - keep current status
+    else {
+      console.log('[Webhook] Unhandled Stripe status:', subscription.status);
+      return;
+    }
+
+    // Only update if status changed
+    if (newStatus && newStatus !== currentSub.status) {
+      console.log(
+        `[Webhook] Updating subscription from ${currentSub.status} to ${newStatus}`,
+        {
+          canceledAt: canceledAt?.toISOString(),
+          endsAt: endsAt?.toISOString(),
+        },
+      );
+
+      await this.prisma.subscription.update({
+        where: { id: currentSub.id },
+        data: {
+          status: newStatus,
+          canceledAt,
+          endsAt,
+          stripeEventId: eventId,
+        },
+      });
+
+      console.log('[Webhook] Subscription updated successfully');
+    } else {
+      console.log('[Webhook] No status change needed');
+    }
   }
 
-  private async handleSubscriptionDeleted(subscription: StripeSubscription, eventId: string): Promise<void> {
+  private async handleSubscriptionDeleted(
+    subscription: StripeSubscription,
+    eventId: string,
+  ): Promise<void> {
     const currentSub = await this.prisma.subscription.findFirst({
       where: { stripeSubscriptionId: subscription.id },
     });
@@ -262,7 +484,10 @@ export class SubscriptionsService {
     }
   }
 
-  private async handlePaymentFailed(invoice: StripeInvoice, eventId: string): Promise<void> {
+  private async handlePaymentFailed(
+    invoice: StripeInvoice,
+    eventId: string,
+  ): Promise<void> {
     const stripeSubscriptionId = invoice.subscription as string;
 
     if (!stripeSubscriptionId) {
@@ -304,6 +529,25 @@ export class SubscriptionsService {
       });
     }
 
+    // Fetch subscription details from Stripe to get current_period_end
+    let endsAt: Date | undefined;
+    try {
+      const stripeSubscription =
+        await this.stripe.subscriptions.retrieve(stripeSubscriptionId);
+      if (stripeSubscription.current_period_end) {
+        endsAt = new Date(stripeSubscription.current_period_end * 1000);
+        console.log(
+          '[Subscription] Got period end from Stripe:',
+          endsAt.toISOString(),
+        );
+      }
+    } catch (error) {
+      console.error(
+        '[Subscription] Failed to fetch subscription from Stripe:',
+        error,
+      );
+    }
+
     // Create new subscription
     await this.prisma.subscription.create({
       data: {
@@ -314,21 +558,30 @@ export class SubscriptionsService {
         stripeSubscriptionId,
         stripeEventId: eventId,
         startedAt: new Date(),
+        ...(endsAt && { endsAt }),
       },
     });
   }
 
   verifyWebhookSignature(payload: Buffer, signature: string): StripeEvent {
-    const webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET');
+    const webhookSecret = this.configService.get<string>(
+      'STRIPE_WEBHOOK_SECRET',
+    );
 
     if (!webhookSecret) {
       throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
     }
 
     try {
-      return this.stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+      return this.stripe.webhooks.constructEvent(
+        payload,
+        signature,
+        webhookSecret,
+      );
     } catch (err) {
-      throw new BadRequestException(`Webhook signature verification failed: ${err.message}`);
+      throw new BadRequestException(
+        `Webhook signature verification failed: ${err.message}`,
+      );
     }
   }
 }
