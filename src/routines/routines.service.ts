@@ -39,8 +39,270 @@ export class RoutinesService {
     return lines.length > 0 ? lines : null;
   }
 
+  /** Normalize JSON muscle fields (strings, {name}, free_exercise_db raw.original, etc.) */
+  private extractMuscleStrings(json: unknown): string[] {
+    if (json == null) return [];
+    if (Array.isArray(json)) {
+      return json.flatMap((entry) => {
+        if (typeof entry === 'string') {
+          const t = entry.trim();
+          return t ? [t] : [];
+        }
+        if (entry && typeof entry === 'object') {
+          const o = entry as Record<string, unknown>;
+          for (const key of [
+            'nameEs',
+            'name_es',
+            'nameEn',
+            'name_en',
+            'name',
+            'label',
+            'muscleName',
+          ]) {
+            const v = o[key];
+            if (typeof v === 'string' && v.trim()) return [v.trim()];
+          }
+        }
+        return [];
+      });
+    }
+    return [];
+  }
+
+  private extractMusclesFromRaw(raw: Record<string, unknown>): {
+    primary: string[];
+    secondary: string[];
+  } {
+    const original = raw?.original as Record<string, unknown> | undefined;
+    const primary =
+      original && Array.isArray(original.primaryMuscles)
+        ? (original.primaryMuscles as unknown[]).filter(
+            (x): x is string => typeof x === 'string' && x.trim().length > 0,
+          )
+        : [];
+    const secondary =
+      original && Array.isArray(original.secondaryMuscles)
+        ? (original.secondaryMuscles as unknown[]).filter(
+            (x): x is string => typeof x === 'string' && x.trim().length > 0,
+          )
+        : [];
+    return { primary, secondary };
+  }
+
+  private mergeUniqueMuscleLabels(...lists: string[][]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const list of lists) {
+      for (const s of list) {
+        const t = s.trim();
+        if (!t) continue;
+        const key = t.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Una sola lengua en UI: si hay músculos en *_es, solo esos; si no, inglés + raw.
+   * Evita duplicar "chest" y "pectoral" a la vez.
+   */
+  private buildMuscleLabels(
+    esJson: unknown,
+    enJson: unknown,
+    fromRaw: string[],
+  ): string[] {
+    const es = this.extractMuscleStrings(esJson);
+    if (es.length > 0) {
+      return this.mergeUniqueMuscleLabels(es);
+    }
+    return this.mergeUniqueMuscleLabels(
+      this.extractMuscleStrings(enJson),
+      fromRaw,
+    );
+  }
+
+  /**
+   * For trainer UI: map catalog labels (ES/EN, lowercase) to Muscle.id for selects / multiselects.
+   */
+  private async loadMuscleLabelToIdMaps(): Promise<{
+    byEs: Map<string, string>;
+    byEn: Map<string, string>;
+  }> {
+    const rows = await this.prisma.muscle.findMany({
+      orderBy: [{ order: 'asc' }, { nameEs: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, nameEs: true },
+    });
+    const byEs = new Map<string, string>();
+    const byEn = new Map<string, string>();
+    for (const r of rows) {
+      const esKey = r.nameEs.trim().toLowerCase();
+      if (!byEs.has(esKey)) byEs.set(esKey, r.id);
+      const enKey = r.name.trim().toLowerCase();
+      if (!byEn.has(enKey)) byEn.set(enKey, r.id);
+    }
+    return { byEs, byEn };
+  }
+
+  private labelsToMuscleIds(
+    labels: string[],
+    byEs: Map<string, string>,
+    byEn: Map<string, string>,
+  ): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const label of labels) {
+      const key = label.trim().toLowerCase();
+      if (!key) continue;
+      const id = byEs.get(key) ?? byEn.get(key);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    return out;
+  }
+
+  private descriptionJsonToPlainText(json: unknown): string {
+    if (json == null) return '';
+    if (Array.isArray(json)) {
+      return json
+        .map((x) => String(x).trim())
+        .filter((line) => line.length > 0)
+        .join('\n');
+    }
+    if (typeof json === 'string') {
+      return json
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .join('\n');
+    }
+    return '';
+  }
+
+  /**
+   * Payload for the “edit custom exercise” form (trainer-owned only).
+   */
+  async getCustomExerciseForEdit(trainerId: string, exerciseId: string) {
+    const row = await this.prisma.exercise.findUnique({
+      where: { id: exerciseId },
+      select: {
+        id: true,
+        source: true,
+        trainerId: true,
+        name: true,
+        nameEs: true,
+        description: true,
+        descriptionEs: true,
+        categoryName: true,
+        categoryNameEs: true,
+        muscles: true,
+        musclesEs: true,
+        musclesSecondary: true,
+        musclesSecondaryEs: true,
+        images: true,
+        videos: true,
+      },
+    });
+
+    if (
+      !row ||
+      row.source !== 'custom' ||
+      row.trainerId !== trainerId
+    ) {
+      throw new NotFoundException('Custom exercise not found');
+    }
+
+    const { byEs, byEn } = await this.loadMuscleLabelToIdMaps();
+
+    const primEs = this.extractMuscleStrings(row.musclesEs);
+    const primEn = this.extractMuscleStrings(row.muscles);
+    const primaryLabels = primEs.length > 0 ? primEs : primEn;
+    const primaryIds = this.labelsToMuscleIds(primaryLabels, byEs, byEn);
+    const primaryMuscleId = primaryIds[0] ?? null;
+
+    const secEs = this.extractMuscleStrings(row.musclesSecondaryEs);
+    const secEn = this.extractMuscleStrings(row.musclesSecondary);
+    const secondaryLabels = secEs.length > 0 ? secEs : secEn;
+    let secondaryMuscleIds = this.labelsToMuscleIds(
+      secondaryLabels,
+      byEs,
+      byEn,
+    );
+    if (primaryMuscleId) {
+      secondaryMuscleIds = secondaryMuscleIds.filter(
+        (id) => id !== primaryMuscleId,
+      );
+    }
+
+    const description =
+      this.descriptionJsonToPlainText(row.descriptionEs) ||
+      this.descriptionJsonToPlainText(row.description);
+
+    const images = Array.isArray(row.images)
+      ? (row.images as Array<Record<string, unknown>>)
+      : [];
+    const videos = Array.isArray(row.videos)
+      ? (row.videos as Array<Record<string, unknown>>)
+      : [];
+    const imageUrl =
+      typeof images[0]?.image === 'string'
+        ? images[0].image
+        : typeof images[0]?.url === 'string'
+          ? images[0].url
+          : null;
+    const videoUrl =
+      typeof videos[0]?.video === 'string'
+        ? videos[0].video
+        : typeof videos[0]?.url === 'string'
+          ? videos[0].url
+          : null;
+
+    return {
+      id: row.id,
+      name: (row.nameEs as string) || row.name,
+      categoryName:
+        (row.categoryNameEs as string) || row.categoryName || null,
+      description,
+      imageUrl,
+      videoUrl,
+      primaryMuscleId,
+      secondaryMuscleIds,
+    };
+  }
+
   async getExercises(userId: string, search?: string) {
     const q = search?.trim();
+
+    // Build search conditions
+    const searchConditions = q
+      ? {
+          OR: [
+            // Search by name (Spanish and English)
+            {
+              nameEs: { contains: q, mode: 'insensitive' as Prisma.QueryMode },
+            },
+            { name: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+            // Search by category
+            {
+              categoryNameEs: {
+                contains: q,
+                mode: 'insensitive' as Prisma.QueryMode,
+              },
+            },
+            {
+              categoryName: {
+                contains: q,
+                mode: 'insensitive' as Prisma.QueryMode,
+              },
+            },
+          ],
+        }
+      : {};
+
     const exercises = await this.prisma.exercise.findMany({
       where: {
         isArchived: false,
@@ -50,6 +312,7 @@ export class RoutinesService {
           { source: 'free_exercise_db' as any },
           { source: 'custom', trainerId: userId },
         ],
+        ...searchConditions,
       },
       select: {
         id: true,
@@ -83,107 +346,280 @@ export class RoutinesService {
       take: 1000,
     });
 
-    const mapped = exercises.map((exercise) => {
-      const raw = (exercise.raw ?? {}) as Record<string, unknown>;
-      const images = Array.isArray(exercise.images)
-        ? (exercise.images as Array<Record<string, unknown>>)
-        : [];
-      const videos = Array.isArray(exercise.videos)
-        ? (exercise.videos as Array<Record<string, unknown>>)
-        : [];
-      const esDescription = (exercise as any).descriptionEs;
-      const esCategoryName = (exercise as any).categoryNameEs;
-      const esEquipment = (exercise as any).equipmentEs;
-      const esMuscles = (exercise as any).musclesEs;
-      const esMusclesSecondary = (exercise as any).musclesSecondaryEs;
-      const esName = (exercise as any).nameEs;
+    const { byEs, byEn } = await this.loadMuscleLabelToIdMaps();
 
-      const imageUrls = images
-        .map((img) =>
-          typeof img?.image === 'string'
-            ? img.image
-            : typeof img?.url === 'string'
-              ? img.url
-              : null,
-        )
-        .filter((value): value is string => Boolean(value));
+    const mapped = exercises.map((exercise) =>
+      this.mapExerciseRowForTrainerList(exercise, byEs, byEn),
+    );
 
-      const videoUrls = videos
-        .map((video) =>
-          typeof video?.video === 'string'
-            ? video.video
-            : typeof video?.url === 'string'
-              ? video.url
-              : null,
-        )
-        .filter((value): value is string => Boolean(value));
+    if (!q) {
+      return mapped;
+    }
 
-      const imageUrl = imageUrls[0] ?? null;
-      const videoUrl = videoUrls[0] ?? null;
-      const customAuthor =
-        exercise.source === 'custom'
-          ? exercise.trainer?.fullName || exercise.trainer?.email || 'Trainer'
-          : null;
-      const datasetAuthor =
-        typeof raw.author === 'string' && raw.author.trim().length > 0
-          ? raw.author.trim()
-          : null;
+    const lowerQ = q.toLowerCase();
+    return mapped.filter((exercise) =>
+      this.exerciseMatchesSearchQuery(exercise, lowerQ),
+    );
+  }
 
-      return {
-        ...exercise,
-        // Priorizar columnas *_es, pero mantener key names estándar para el frontend.
-        name: esName ?? exercise.name,
-        description: esDescription ?? exercise.description,
-        categoryName: esCategoryName ?? exercise.categoryName,
-        equipment: esEquipment ?? (exercise as any).equipment,
-        muscles: esMuscles ?? (exercise as any).muscles,
-        musclesSecondary:
-          esMusclesSecondary ?? (exercise as any).musclesSecondary,
-        author: customAuthor ?? datasetAuthor,
-        license: exercise.license ?? null,
-        imageUrl,
-        videoUrl,
-        imageUrls,
-        videoUrls,
-      };
-    });
+  private mapExerciseRowForTrainerList(
+    exercise: any,
+    byEs: Map<string, string>,
+    byEn: Map<string, string>,
+  ) {
+    const raw = (exercise.raw ?? {}) as Record<string, unknown>;
+    const images = Array.isArray(exercise.images)
+      ? (exercise.images as Array<Record<string, unknown>>)
+      : [];
+    const videos = Array.isArray(exercise.videos)
+      ? (exercise.videos as Array<Record<string, unknown>>)
+      : [];
+    const esDescription = exercise.descriptionEs;
+    const esCategoryName = exercise.categoryNameEs;
+    const esEquipment = exercise.equipmentEs;
+    const esMuscles = exercise.musclesEs;
+    const esMusclesSecondary = exercise.musclesSecondaryEs;
+    const esName = exercise.nameEs;
 
-    if (!q) return mapped;
+    const imageUrls = images
+      .map((img) =>
+        typeof img?.image === 'string'
+          ? img.image
+          : typeof img?.url === 'string'
+            ? img.url
+            : null,
+      )
+      .filter((value): value is string => Boolean(value));
 
-    const query = q.toLowerCase();
-    const includesQuery = (value: unknown): boolean =>
-      typeof value === 'string' && value.toLowerCase().includes(query);
+    const videoUrls = videos
+      .map((video) =>
+        typeof video?.video === 'string'
+          ? video.video
+          : typeof video?.url === 'string'
+            ? video.url
+            : null,
+      )
+      .filter((value): value is string => Boolean(value));
+
+    const imageUrl = imageUrls[0] ?? null;
+    const videoUrl = videoUrls[0] ?? null;
+    const customAuthor =
+      exercise.source === 'custom'
+        ? exercise.trainer?.fullName || exercise.trainer?.email || 'Trainer'
+        : null;
+    const datasetAuthor =
+      typeof raw.author === 'string' && raw.author.trim().length > 0
+        ? raw.author.trim()
+        : null;
+
+    const fromRaw = this.extractMusclesFromRaw(raw);
+    const muscleLabelsPrimary = this.buildMuscleLabels(
+      esMuscles,
+      exercise.muscles,
+      fromRaw.primary,
+    );
+    const muscleLabelsSecondary = this.buildMuscleLabels(
+      esMusclesSecondary,
+      exercise.musclesSecondary,
+      fromRaw.secondary,
+    );
+
+    const primaryMuscleIds = this.labelsToMuscleIds(
+      muscleLabelsPrimary,
+      byEs,
+      byEn,
+    );
+    const secondaryMuscleIds = this.labelsToMuscleIds(
+      muscleLabelsSecondary,
+      byEs,
+      byEn,
+    );
+
+    return {
+      ...exercise,
+      name: esName ?? exercise.name,
+      description: esDescription ?? exercise.description,
+      categoryName: esCategoryName ?? exercise.categoryName,
+      equipment: esEquipment ?? exercise.equipment,
+      muscles: esMuscles ?? exercise.muscles,
+      musclesSecondary: esMusclesSecondary ?? exercise.musclesSecondary,
+      muscleLabelsPrimary,
+      muscleLabelsSecondary,
+      primaryMuscleIds,
+      secondaryMuscleIds,
+      author: customAuthor ?? datasetAuthor,
+      license: exercise.license ?? null,
+      imageUrl,
+      videoUrl,
+      imageUrls,
+      videoUrls,
+    };
+  }
+
+  private exerciseMatchesSearchQuery(exercise: any, lowerQ: string): boolean {
+    const matchedByBasic =
+      exercise.name?.toLowerCase().includes(lowerQ) ||
+      exercise.categoryName?.toLowerCase().includes(lowerQ) ||
+      (typeof exercise.author === 'string' &&
+        exercise.author.toLowerCase().includes(lowerQ));
+
+    if (matchedByBasic) return true;
+
+    const muscleHaystack = [
+      ...(exercise.muscleLabelsPrimary ?? []),
+      ...(exercise.muscleLabelsSecondary ?? []),
+    ]
+      .join(' ')
+      .toLowerCase();
+    if (muscleHaystack.includes(lowerQ)) return true;
 
     const includesQueryInArray = (value: unknown): boolean =>
       Array.isArray(value) &&
       value.some(
         (entry) =>
-          typeof entry === 'string' && entry.toLowerCase().includes(query),
+          typeof entry === 'string' && entry.toLowerCase().includes(lowerQ),
       );
 
-    return mapped.filter((exercise) => {
-      return (
-        includesQuery(exercise.name) ||
-        includesQuery((exercise as any).nameEs) ||
-        includesQuery(exercise.categoryName) ||
-        includesQuery((exercise as any).categoryNameEs) ||
-        includesQuery((exercise as any).author) ||
-        includesQueryInArray((exercise as any).muscles) ||
-        includesQueryInArray((exercise as any).musclesEs) ||
-        includesQueryInArray((exercise as any).musclesSecondary) ||
-        includesQueryInArray((exercise as any).musclesSecondaryEs) ||
-        includesQueryInArray((exercise as any).equipment) ||
-        includesQueryInArray((exercise as any).equipmentEs) ||
-        includesQueryInArray((exercise as any).description) ||
-        includesQueryInArray((exercise as any).descriptionEs)
-      );
+    return (
+      includesQueryInArray(exercise.muscles) ||
+      includesQueryInArray(exercise.musclesEs) ||
+      includesQueryInArray(exercise.musclesSecondary) ||
+      includesQueryInArray(exercise.musclesSecondaryEs) ||
+      includesQueryInArray(exercise.equipment) ||
+      includesQueryInArray(exercise.equipmentEs)
+    );
+  }
+
+  /** Solo ejercicios custom del trainer; orden por última actualización. */
+  async listTrainerCustomExercises(userId: string, search?: string) {
+    const exercises = await this.prisma.exercise.findMany({
+      where: {
+        source: 'custom',
+        trainerId: userId,
+        isArchived: false,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        source: true,
+        trainerId: true,
+        externalId: true,
+        name: true,
+        nameEs: true,
+        description: true,
+        descriptionEs: true,
+        categoryName: true,
+        categoryNameEs: true,
+        equipment: true,
+        equipmentEs: true,
+        muscles: true,
+        musclesEs: true,
+        musclesSecondary: true,
+        musclesSecondaryEs: true,
+        images: true,
+        videos: true,
+        license: true,
+        raw: true,
+        updatedAt: true,
+        trainer: {
+          select: {
+            fullName: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: [{ updatedAt: 'desc' }],
+      take: 500,
     });
+
+    const { byEs, byEn } = await this.loadMuscleLabelToIdMaps();
+    const mapped = exercises.map((exercise) =>
+      this.mapExerciseRowForTrainerList(exercise, byEs, byEn),
+    );
+
+    const q = search?.trim();
+    if (!q) return mapped;
+
+    const lowerQ = q.toLowerCase();
+    return mapped.filter((exercise) =>
+      this.exerciseMatchesSearchQuery(exercise, lowerQ),
+    );
+  }
+
+  /**
+   * Catalog for trainer UI. Dedupes by Spanish label: the seed migration paired
+   * each musclesEs[] element with every muscles[] entry (cartesian product), so
+   * many rows can share the same nameEs with different English `name` values.
+   */
+  async listMusclesCatalog() {
+    const rows = await this.prisma.muscle.findMany({
+      orderBy: [{ order: 'asc' }, { nameEs: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, nameEs: true },
+    });
+    const byEsKey = new Map<
+      string,
+      { id: string; name: string; nameEs: string }
+    >();
+    for (const r of rows) {
+      const key = r.nameEs.trim().toLowerCase();
+      if (!byEsKey.has(key)) {
+        byEsKey.set(key, { id: r.id, name: r.name, nameEs: r.nameEs });
+      }
+    }
+    return [...byEsKey.values()].sort((a, b) =>
+      a.nameEs.localeCompare(b.nameEs, 'es', { sensitivity: 'base' }),
+    );
+  }
+
+  /** Resolves DB muscle UUIDs to JSON arrays (lowercase) for Exercise columns. */
+  private async resolveMuscleIdsToJsonArrays(ids: string[]): Promise<{
+    en: Prisma.InputJsonValue;
+    es: Prisma.InputJsonValue;
+  }> {
+    const uniqueOrder: string[] = [];
+    for (const id of ids) {
+      if (!uniqueOrder.includes(id)) uniqueOrder.push(id);
+    }
+    if (uniqueOrder.length === 0) {
+      return { en: [], es: [] };
+    }
+    const rows = await this.prisma.muscle.findMany({
+      where: { id: { in: uniqueOrder } },
+      select: { id: true, name: true, nameEs: true },
+    });
+    if (rows.length !== uniqueOrder.length) {
+      throw new BadRequestException('Uno o más músculos no son válidos');
+    }
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const orderedEn: string[] = [];
+    const orderedEs: string[] = [];
+    for (const id of uniqueOrder) {
+      const r = byId.get(id);
+      if (!r) {
+        throw new BadRequestException('Uno o más músculos no son válidos');
+      }
+      orderedEn.push(r.name.toLowerCase());
+      orderedEs.push(r.nameEs.toLowerCase());
+    }
+    return {
+      en: orderedEn as Prisma.InputJsonValue,
+      es: orderedEs as Prisma.InputJsonValue,
+    };
   }
 
   async createCustomExercise(userId: string, dto: CreateCustomExerciseDto) {
     const images = dto.imageUrl ? [{ image: dto.imageUrl }] : [];
     const videos = dto.videoUrl ? [{ video: dto.videoUrl }] : [];
     const descriptionArray = this.toDescriptionArray(dto.description);
+
+    const primaryJson =
+      dto.primaryMuscleIds !== undefined
+        ? await this.resolveMuscleIdsToJsonArrays(dto.primaryMuscleIds)
+        : null;
+    const secondaryJson =
+      dto.secondaryMuscleIds !== undefined
+        ? await this.resolveMuscleIdsToJsonArrays(dto.secondaryMuscleIds)
+        : null;
 
     return this.prisma.exercise.create({
       data: {
@@ -200,6 +636,15 @@ export class RoutinesService {
           : Prisma.DbNull,
         categoryName: dto.categoryName ?? null,
         categoryNameEs: dto.categoryName ?? null,
+        ...(primaryJson
+          ? { muscles: primaryJson.en, musclesEs: primaryJson.es }
+          : {}),
+        ...(secondaryJson
+          ? {
+              musclesSecondary: secondaryJson.en,
+              musclesSecondaryEs: secondaryJson.es,
+            }
+          : {}),
         images: images as any,
         videos: videos as any,
         raw: {
@@ -251,7 +696,16 @@ export class RoutinesService {
         ? this.toDescriptionArray(dto.description)
         : undefined;
 
-    return this.prisma.exercise.update({
+    const primaryJson =
+      dto.primaryMuscleIds !== undefined
+        ? await this.resolveMuscleIdsToJsonArrays(dto.primaryMuscleIds)
+        : null;
+    const secondaryJson =
+      dto.secondaryMuscleIds !== undefined
+        ? await this.resolveMuscleIdsToJsonArrays(dto.secondaryMuscleIds)
+        : null;
+
+    await this.prisma.exercise.update({
       where: { id: exerciseId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name, nameEs: dto.name } : {}),
@@ -268,10 +722,21 @@ export class RoutinesService {
         ...(dto.categoryName !== undefined
           ? { categoryName: dto.categoryName, categoryNameEs: dto.categoryName }
           : {}),
+        ...(primaryJson
+          ? { muscles: primaryJson.en, musclesEs: primaryJson.es }
+          : {}),
+        ...(secondaryJson
+          ? {
+              musclesSecondary: secondaryJson.en,
+              musclesSecondaryEs: secondaryJson.es,
+            }
+          : {}),
         images: nextImages as any,
         videos: nextVideos as any,
       },
     });
+
+    return this.getCustomExerciseForEdit(userId, exerciseId);
   }
 
   private toUtcStartOfDay(dateStr: string): Date {
@@ -468,7 +933,9 @@ export class RoutinesService {
       select: { id: true },
     });
     if (!template) {
-      throw new NotFoundException('Routine template not found or already archived');
+      throw new NotFoundException(
+        'Routine template not found or already archived',
+      );
     }
     return this.prisma.routineTemplate.update({
       where: { id: templateId },

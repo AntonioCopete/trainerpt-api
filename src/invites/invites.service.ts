@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { RedeemInviteDto } from './dto/redeem-invite.dto';
 import { randomBytes } from 'crypto';
@@ -8,7 +9,10 @@ const INVITE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 @Injectable()
 export class InvitesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subscriptionsService: SubscriptionsService,
+  ) {}
 
   private generateCode(length = 8) {
     const bytes = randomBytes(length);
@@ -104,6 +108,15 @@ export class InvitesService {
       });
 
       if (!existingLink) {
+        // Check subscription limit before creating link
+        const subscription = await this.subscriptionsService.getSubscriptionWithUsage(invite.trainerId);
+        
+        if (subscription.clientLimit !== null && subscription.clientCount >= subscription.clientLimit) {
+          throw new ForbiddenException(
+            `This trainer has reached the limit of ${subscription.clientLimit} clients for their ${subscription.plan} plan.`
+          );
+        }
+
         await tx.trainerMemberLink.create({
           data: {
             trainerId: invite.trainerId,
