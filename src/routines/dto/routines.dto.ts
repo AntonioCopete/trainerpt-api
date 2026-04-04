@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  ArrayUnique,
   IsArray,
   IsNotEmpty,
   IsOptional,
@@ -7,6 +9,7 @@ import {
   Matches,
   IsUrl,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateRoutineTemplateDto {
@@ -103,6 +106,19 @@ export class CreateCustomExerciseDto {
   @IsOptional()
   @IsUrl()
   videoUrl?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(1)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  primaryMuscleIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  secondaryMuscleIds?: string[];
 }
 
 export class UpdateCustomExerciseDto {
@@ -122,11 +138,26 @@ export class UpdateCustomExerciseDto {
   categoryName?: string;
 
   @IsOptional()
+  @ValidateIf((_, v) => typeof v === 'string' && v.trim().length > 0)
   @IsUrl()
   imageUrl?: string;
 
   @IsOptional()
+  @ValidateIf((_, v) => typeof v === 'string' && v.trim().length > 0)
   @IsUrl()
   videoUrl?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(1)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  primaryMuscleIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  secondaryMuscleIds?: string[];
 }
 

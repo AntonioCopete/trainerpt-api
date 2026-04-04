@@ -26,6 +26,13 @@ export class RoutinesController {
   constructor(private readonly routinesService: RoutinesService) {}
 
   @UseGuards(SupabaseJwtGuard)
+  @Get('muscles')
+  async getMuscles(@CurrentUser() _user: AuthUser) {
+    const muscles = await this.routinesService.listMusclesCatalog();
+    return { muscles };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
   @Get('exercises')
   async getExercises(
     @CurrentUser() user: AuthUser,
@@ -42,6 +49,32 @@ export class RoutinesController {
     @Body() dto: CreateCustomExerciseDto,
   ) {
     const exercise = await this.routinesService.createCustomExercise(user.id, dto);
+    return { exercise };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Get('exercises/custom')
+  async listTrainerCustomExercises(
+    @CurrentUser() user: AuthUser,
+    @Query('q') q?: string,
+  ) {
+    const exercises = await this.routinesService.listTrainerCustomExercises(
+      user.id,
+      q,
+    );
+    return { exercises };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Get('exercises/custom/:exerciseId')
+  async getCustomExerciseForEdit(
+    @CurrentUser() user: AuthUser,
+    @Param('exerciseId') exerciseId: string,
+  ) {
+    const exercise = await this.routinesService.getCustomExerciseForEdit(
+      user.id,
+      exerciseId,
+    );
     return { exercise };
   }
 
