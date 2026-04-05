@@ -276,33 +276,10 @@ export class RoutinesService {
 
   async getExercises(userId: string, search?: string) {
     const q = search?.trim();
-
-    // Build search conditions
-    const searchConditions = q
-      ? {
-          OR: [
-            // Search by name (Spanish and English)
-            {
-              nameEs: { contains: q, mode: 'insensitive' as Prisma.QueryMode },
-            },
-            { name: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
-            // Search by category
-            {
-              categoryNameEs: {
-                contains: q,
-                mode: 'insensitive' as Prisma.QueryMode,
-              },
-            },
-            {
-              categoryName: {
-                contains: q,
-                mode: 'insensitive' as Prisma.QueryMode,
-              },
-            },
-          ],
-        }
-      : {};
-
+    const narrowInMemory = Boolean(q);
+    // Sin texto de búsqueda: lista inicial acotada (la UI muestra ~100).
+    // Con q: cargar todo el catálogo elegible; si no, take:1000 haría
+    // desaparecer coincidencias por nombre o músculo en texto fuera del primer bloque.
     const exercises = await this.prisma.exercise.findMany({
       where: {
         isArchived: false,
@@ -312,7 +289,6 @@ export class RoutinesService {
           { source: 'free_exercise_db' as any },
           { source: 'custom', trainerId: userId },
         ],
-        ...searchConditions,
       },
       select: {
         id: true,
@@ -343,23 +319,24 @@ export class RoutinesService {
         },
       },
       orderBy: [{ source: 'asc' }, { name: 'asc' }],
-      take: 1000,
+      ...(narrowInMemory ? {} : { take: 1000 }),
     });
 
     const { byEs, byEn } = await this.loadMuscleLabelToIdMaps();
 
-    const mapped = exercises.map((exercise) =>
+    let mapped = exercises.map((exercise) =>
       this.mapExerciseRowForTrainerList(exercise, byEs, byEn),
     );
 
-    if (!q) {
-      return mapped;
+    if (q) {
+      const lowerQ = q.toLowerCase();
+      mapped = mapped.filter((exercise) =>
+        this.exerciseMatchesSearchQuery(exercise, lowerQ),
+      );
+      mapped = this.sortExercisesBySearchRelevance(mapped, lowerQ);
     }
 
-    const lowerQ = q.toLowerCase();
-    return mapped.filter((exercise) =>
-      this.exerciseMatchesSearchQuery(exercise, lowerQ),
-    );
+    return mapped;
   }
 
   private mapExerciseRowForTrainerList(
@@ -438,6 +415,14 @@ export class RoutinesService {
     return {
       ...exercise,
       name: esName ?? exercise.name,
+      /** Nombre EN en BD (para búsqueda; `name` arriba prioriza ES) */
+      listSearchNameEn:
+        typeof exercise.name === 'string' ? exercise.name : undefined,
+      /** Categoría EN en BD (para búsqueda) */
+      listSearchCategoryEn:
+        typeof exercise.categoryName === 'string'
+          ? exercise.categoryName
+          : undefined,
       description: esDescription ?? exercise.description,
       categoryName: esCategoryName ?? exercise.categoryName,
       equipment: esEquipment ?? exercise.equipment,
@@ -456,38 +441,116 @@ export class RoutinesService {
     };
   }
 
-  private exerciseMatchesSearchQuery(exercise: any, lowerQ: string): boolean {
-    const matchedByBasic =
-      exercise.name?.toLowerCase().includes(lowerQ) ||
-      exercise.categoryName?.toLowerCase().includes(lowerQ) ||
-      (typeof exercise.author === 'string' &&
-        exercise.author.toLowerCase().includes(lowerQ));
-
-    if (matchedByBasic) return true;
-
-    const muscleHaystack = [
-      ...(exercise.muscleLabelsPrimary ?? []),
-      ...(exercise.muscleLabelsSecondary ?? []),
-    ]
-      .join(' ')
-      .toLowerCase();
-    if (muscleHaystack.includes(lowerQ)) return true;
-
-    const includesQueryInArray = (value: unknown): boolean =>
+  /** Cadenas en arrays JSON (músculos, equipo, etc.) */
+  private exerciseJsonStringArrayMatches(
+    value: unknown,
+    lowerQ: string,
+  ): boolean {
+    return (
       Array.isArray(value) &&
       value.some(
         (entry) =>
           typeof entry === 'string' && entry.toLowerCase().includes(lowerQ),
-      );
-
-    return (
-      includesQueryInArray(exercise.muscles) ||
-      includesQueryInArray(exercise.musclesEs) ||
-      includesQueryInArray(exercise.musclesSecondary) ||
-      includesQueryInArray(exercise.musclesSecondaryEs) ||
-      includesQueryInArray(exercise.equipment) ||
-      includesQueryInArray(exercise.equipmentEs)
+      )
     );
+  }
+
+  private exerciseSearchMatchesBasic(exercise: any, lowerQ: string): boolean {
+    const nameEs =
+      typeof exercise.nameEs === 'string' ? exercise.nameEs.toLowerCase() : '';
+    const nameEn =
+      typeof exercise.listSearchNameEn === 'string'
+        ? exercise.listSearchNameEn.toLowerCase()
+        : '';
+    const catEs =
+      typeof exercise.categoryNameEs === 'string'
+        ? exercise.categoryNameEs.toLowerCase()
+        : '';
+    const catEn =
+      typeof exercise.listSearchCategoryEn === 'string'
+        ? exercise.listSearchCategoryEn.toLowerCase()
+        : '';
+    return (
+      exercise.name?.toLowerCase().includes(lowerQ) ||
+      nameEs.includes(lowerQ) ||
+      nameEn.includes(lowerQ) ||
+      exercise.categoryName?.toLowerCase().includes(lowerQ) ||
+      catEs.includes(lowerQ) ||
+      catEn.includes(lowerQ) ||
+      (typeof exercise.author === 'string' &&
+        exercise.author.toLowerCase().includes(lowerQ))
+    );
+  }
+
+  private exercisePrimaryMuscleTextMatch(
+    exercise: any,
+    lowerQ: string,
+  ): boolean {
+    const primaryHaystack = [...(exercise.muscleLabelsPrimary ?? [])]
+      .join(' ')
+      .toLowerCase();
+    if (primaryHaystack.includes(lowerQ)) return true;
+    return (
+      this.exerciseJsonStringArrayMatches(exercise.muscles, lowerQ) ||
+      this.exerciseJsonStringArrayMatches(exercise.musclesEs, lowerQ)
+    );
+  }
+
+  private exerciseSecondaryMuscleTextMatch(
+    exercise: any,
+    lowerQ: string,
+  ): boolean {
+    const secondaryHaystack = [...(exercise.muscleLabelsSecondary ?? [])]
+      .join(' ')
+      .toLowerCase();
+    if (secondaryHaystack.includes(lowerQ)) return true;
+    return (
+      this.exerciseJsonStringArrayMatches(exercise.musclesSecondary, lowerQ) ||
+      this.exerciseJsonStringArrayMatches(
+        exercise.musclesSecondaryEs,
+        lowerQ,
+      )
+    );
+  }
+
+  private exerciseEquipmentTextMatch(exercise: any, lowerQ: string): boolean {
+    return (
+      this.exerciseJsonStringArrayMatches(exercise.equipment, lowerQ) ||
+      this.exerciseJsonStringArrayMatches(exercise.equipmentEs, lowerQ)
+    );
+  }
+
+  private exerciseMatchesSearchQuery(exercise: any, lowerQ: string): boolean {
+    if (this.exerciseSearchMatchesBasic(exercise, lowerQ)) return true;
+    if (this.exercisePrimaryMuscleTextMatch(exercise, lowerQ)) return true;
+    if (this.exerciseSecondaryMuscleTextMatch(exercise, lowerQ)) return true;
+    if (this.exerciseEquipmentTextMatch(exercise, lowerQ)) return true;
+    return false;
+  }
+
+  /**
+   * Con texto de búsqueda: nombre/categoría/autor primero; luego aciertos en
+   * músculo principal; luego solo músculo secundario; luego solo equipo.
+   */
+  private exerciseSearchSortRank(exercise: any, lowerQ: string): number {
+    if (this.exerciseSearchMatchesBasic(exercise, lowerQ)) return 0;
+    if (this.exercisePrimaryMuscleTextMatch(exercise, lowerQ)) return 1;
+    if (this.exerciseSecondaryMuscleTextMatch(exercise, lowerQ)) return 2;
+    return 3;
+  }
+
+  private sortExercisesBySearchRelevance(
+    exercises: any[],
+    lowerQ: string,
+  ): any[] {
+    return [...exercises].sort((a, b) => {
+      const ra = this.exerciseSearchSortRank(a, lowerQ);
+      const rb = this.exerciseSearchSortRank(b, lowerQ);
+      if (ra !== rb) return ra - rb;
+      const na = String(a.name ?? '').toLowerCase();
+      const nb = String(b.name ?? '').toLowerCase();
+      return na.localeCompare(nb, 'es');
+    });
   }
 
   /** Solo ejercicios custom del trainer; orden por última actualización. */
@@ -541,9 +604,10 @@ export class RoutinesService {
     if (!q) return mapped;
 
     const lowerQ = q.toLowerCase();
-    return mapped.filter((exercise) =>
+    const filtered = mapped.filter((exercise) =>
       this.exerciseMatchesSearchQuery(exercise, lowerQ),
     );
+    return this.sortExercisesBySearchRelevance(filtered, lowerQ);
   }
 
   /**
