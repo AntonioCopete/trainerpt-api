@@ -11,6 +11,7 @@ import {
   UpdateFormTemplateDto,
   SubmitAssignmentDto,
   PresignedUploadUrlDto,
+  PHOTO_URLS_BATCH_MAX,
 } from './dto/create-form-template.dto';
 import { S3UploadService } from './s3-upload.service';
 import { Prisma } from 'generated/prisma/client';
@@ -506,6 +507,203 @@ export class FormsService {
     }
 
     return assignment;
+  }
+
+  private parseSchemaSnapshot(schemaSnapshot: unknown): Array<{
+    id: string;
+    type: string;
+    label: string;
+    unit?: string;
+    order: number;
+  }> {
+    if (!Array.isArray(schemaSnapshot)) {
+      return [];
+    }
+    return schemaSnapshot
+      .map((raw: unknown, i: number) => {
+        const o =
+          raw !== null && typeof raw === 'object'
+            ? (raw as Record<string, unknown>)
+            : {};
+        const orderRaw = o.order;
+        const order = typeof orderRaw === 'number' ? orderRaw : i;
+        const idRaw = o.id;
+        const id =
+          typeof idRaw === 'string' && idRaw.length > 0
+            ? idRaw
+            : `field_${order}`;
+        const typeRaw = o.type;
+        const type = typeof typeRaw === 'string' ? typeRaw : '';
+        const labelRaw = o.label;
+        const fallbackLabel = typeof idRaw === 'string' ? idRaw : id;
+        const label =
+          typeof labelRaw === 'string' && labelRaw.length > 0
+            ? labelRaw
+            : fallbackLabel;
+        const unitRaw = o.unit;
+        const unit =
+          typeof unitRaw === 'string' && unitRaw.trim() !== ''
+            ? unitRaw
+            : undefined;
+        return { id, type, label, unit, order };
+      })
+      .filter((f) => f.id.length > 0);
+  }
+
+  private parseNumericAnswer(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+      const n = Number(value);
+      if (Number.isFinite(n)) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  private async fetchMemberProgressPayload(opts: {
+    memberId: string;
+    trainerId?: string;
+  }) {
+    const where: Prisma.FormAssignmentWhereInput = {
+      memberId: opts.memberId,
+      status: 'completed',
+    };
+    if (opts.trainerId) {
+      where.trainerId = opts.trainerId;
+    }
+
+    const assignments = await this.prisma.formAssignment.findMany({
+      where,
+      include: {
+        template: { select: { id: true, name: true } },
+        responses: { orderBy: { submittedAt: 'asc' } },
+      },
+    });
+
+    const numberFieldMap = new Map<
+      string,
+      { id: string; label: string; unit?: string }
+    >();
+    const photoFieldMap = new Map<string, { id: string; label: string }>();
+
+    for (const a of assignments) {
+      const fields = this.parseSchemaSnapshot(a.schemaSnapshot);
+      for (const f of fields) {
+        if (f.type === 'number' && !numberFieldMap.has(f.id)) {
+          numberFieldMap.set(f.id, {
+            id: f.id,
+            label: f.label || f.id,
+            ...(f.unit ? { unit: f.unit } : {}),
+          });
+        }
+        if (f.type === 'photo' && !photoFieldMap.has(f.id)) {
+          photoFieldMap.set(f.id, { id: f.id, label: f.label || f.id });
+        }
+      }
+    }
+
+    const points: Array<{
+      assignmentId: string;
+      templateId: string | null;
+      templateName: string;
+      submittedAt: string;
+      numbers: Record<string, number>;
+      photoKeys: Record<string, string>;
+    }> = [];
+
+    for (const a of assignments) {
+      const fields = this.parseSchemaSnapshot(a.schemaSnapshot);
+      const numberIds = new Set(
+        fields.filter((f) => f.type === 'number').map((f) => f.id),
+      );
+      const photoIds = new Set(
+        fields.filter((f) => f.type === 'photo').map((f) => f.id),
+      );
+
+      for (const r of a.responses) {
+        const answers = (r.answers ?? {}) as Record<string, unknown>;
+        const numbers: Record<string, number> = {};
+        const photoKeys: Record<string, string> = {};
+
+        for (const id of numberIds) {
+          const n = this.parseNumericAnswer(answers[id]);
+          if (n !== null) {
+            numbers[id] = n;
+          }
+        }
+        for (const id of photoIds) {
+          const v = answers[id];
+          if (typeof v === 'string' && v.trim() !== '') {
+            photoKeys[id] = v.trim();
+          }
+        }
+
+        points.push({
+          assignmentId: a.id,
+          templateId: a.templateId,
+          templateName: a.template?.name ?? 'Formulario',
+          submittedAt: r.submittedAt.toISOString(),
+          numbers,
+          photoKeys,
+        });
+      }
+    }
+
+    points.sort(
+      (x, y) =>
+        new Date(x.submittedAt).getTime() - new Date(y.submittedAt).getTime(),
+    );
+
+    const collator = new Intl.Collator('es');
+    return {
+      points,
+      numberFields: [...numberFieldMap.values()].sort((a, b) =>
+        collator.compare(a.label, b.label),
+      ),
+      photoFields: [...photoFieldMap.values()].sort((a, b) =>
+        collator.compare(a.label, b.label),
+      ),
+    };
+  }
+
+  async getMemberProgressForTrainer(trainerId: string, memberId: string) {
+    const link = await this.prisma.trainerMemberLink.findUnique({
+      where: {
+        trainerId_memberId: { trainerId, memberId },
+      },
+    });
+    if (!link) {
+      throw new ForbiddenException('Member is not linked to trainer');
+    }
+    return this.fetchMemberProgressPayload({ trainerId, memberId });
+  }
+
+  async getMemberProgressForSelf(memberId: string) {
+    return this.fetchMemberProgressPayload({ memberId });
+  }
+
+  async getPresignedReadUrlsBatch(userId: string, keys: string[]) {
+    const unique = [
+      ...new Set(
+        keys
+          .map((k) => (typeof k === 'string' ? k.trim() : ''))
+          .filter(Boolean),
+      ),
+    ].slice(0, PHOTO_URLS_BATCH_MAX);
+
+    const urls: Record<string, string> = {};
+    for (const key of unique) {
+      try {
+        const { url } = await this.getPresignedReadUrl(userId, key);
+        urls[key] = url;
+      } catch {
+        // clave inválida o sin permiso: se omite
+      }
+    }
+    return { urls };
   }
 
   async cancelAssignment(
