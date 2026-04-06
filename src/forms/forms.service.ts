@@ -17,6 +17,7 @@ import { S3UploadService } from './s3-upload.service';
 import { Prisma } from 'generated/prisma/client';
 import { TranslationService } from '../common/services/translation.service';
 import { BrevoEmailService } from '../common/services/brevo-email.service';
+import { assertValidFormTemplateSchema } from './form-template-schema';
 
 function escapeHtml(s: string): string {
   return s
@@ -187,6 +188,7 @@ export class FormsService {
   }
 
   async createTemplate(trainerId: string, dto: CreateFormTemplateDto) {
+    assertValidFormTemplateSchema(dto.schema);
     const template = await this.prisma.formTemplate.create({
       data: {
         trainerId,
@@ -332,7 +334,10 @@ export class FormsService {
 
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-    if (dto.schema !== undefined) data.schema = dto.schema as any;
+    if (dto.schema !== undefined) {
+      assertValidFormTemplateSchema(dto.schema);
+      data.schema = dto.schema as any;
+    }
 
     return await this.prisma.formTemplate.update({
       where: { id: templateId },
@@ -387,17 +392,12 @@ export class FormsService {
       );
     }
 
-    const dueAt = dto.dueAt ? this.toUtcEndOfDay(dto.dueAt) : null;
-    if (dueAt) {
-      const now = new Date();
-      if (dueAt.getTime() < now.getTime()) {
-        throw new BadRequestException('dueAt must be today or a future date');
-      }
+    const dueAt = this.toUtcEndOfDay(dto.dueAt);
+    const now = new Date();
+    if (dueAt.getTime() < now.getTime()) {
+      throw new BadRequestException('dueAt must be today or a future date');
     }
-    const windowStart = dueAt
-      ? new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS)
-      : // 72 hours before
-        null;
+    const windowStart = new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS);
 
     const assignment = await this.prisma.formAssignment.create({
       data: {
@@ -563,6 +563,46 @@ export class FormsService {
     return null;
   }
 
+  /**
+   * En progreso agregamos métricas por clave canónica para unir:
+   * - campos por defecto (`weight`)
+   * - campos creados "desde cero" con label equivalente (`Peso`)
+   */
+  private canonicalProgressMetricId(field: {
+    id: string;
+    type: string;
+    label: string;
+  }): string {
+    if (field.type !== 'number') return field.id;
+    const norm = (v: string) =>
+      v
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+    const idNorm = norm(field.id);
+    const labelNorm = norm(field.label);
+    const key = idNorm || labelNorm;
+    const byLabel = labelNorm;
+
+    if (
+      key === 'weight' ||
+      byLabel === 'peso' ||
+      byLabel === 'peso_corporal' ||
+      byLabel === 'body_weight'
+    ) {
+      return 'weight';
+    }
+
+    if (key === 'age' || byLabel === 'edad') {
+      return 'age';
+    }
+
+    return field.id;
+  }
+
   private async fetchMemberProgressPayload(opts: {
     memberId: string;
     trainerId?: string;
@@ -592,9 +632,10 @@ export class FormsService {
     for (const a of assignments) {
       const fields = this.parseSchemaSnapshot(a.schemaSnapshot);
       for (const f of fields) {
-        if (f.type === 'number' && !numberFieldMap.has(f.id)) {
-          numberFieldMap.set(f.id, {
-            id: f.id,
+        const metricId = this.canonicalProgressMetricId(f);
+        if (f.type === 'number' && !numberFieldMap.has(metricId)) {
+          numberFieldMap.set(metricId, {
+            id: metricId,
             label: f.label || f.id,
             ...(f.unit ? { unit: f.unit } : {}),
           });
@@ -616,9 +657,12 @@ export class FormsService {
 
     for (const a of assignments) {
       const fields = this.parseSchemaSnapshot(a.schemaSnapshot);
-      const numberIds = new Set(
-        fields.filter((f) => f.type === 'number').map((f) => f.id),
-      );
+      const numberFields = fields
+        .filter((f) => f.type === 'number')
+        .map((f) => ({
+          sourceId: f.id,
+          metricId: this.canonicalProgressMetricId(f),
+        }));
       const photoIds = new Set(
         fields.filter((f) => f.type === 'photo').map((f) => f.id),
       );
@@ -628,10 +672,10 @@ export class FormsService {
         const numbers: Record<string, number> = {};
         const photoKeys: Record<string, string> = {};
 
-        for (const id of numberIds) {
-          const n = this.parseNumericAnswer(answers[id]);
+        for (const field of numberFields) {
+          const n = this.parseNumericAnswer(answers[field.sourceId]);
           if (n !== null) {
-            numbers[id] = n;
+            numbers[field.metricId] = n;
           }
         }
         for (const id of photoIds) {
