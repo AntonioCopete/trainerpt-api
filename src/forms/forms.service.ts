@@ -15,6 +15,126 @@ import {
 import { S3UploadService } from './s3-upload.service';
 import { Prisma } from 'generated/prisma/client';
 import { TranslationService } from '../common/services/translation.service';
+import { BrevoEmailService } from '../common/services/brevo-email.service';
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const MONTHS_ES = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+] as const;
+
+/** Fecha límite legible (componentes UTC internos, sin mencionar zona al usuario). */
+function formatDueDateForEmail(d: Date): string {
+  const day = d.getUTCDate();
+  const month = MONTHS_ES[d.getUTCMonth()];
+  const year = d.getUTCFullYear();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${day} de ${month} de ${year}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/**
+ * Colores alineados con el correo de magic link (tema oscuro + acento).
+ * Opcional: EMAIL_PAGE_BG, EMAIL_CARD_BG, EMAIL_CARD_BORDER, EMAIL_ACCENT_COLOR,
+ * EMAIL_ACCENT_COLOR_END (gradiente CTA), EMAIL_TEXT_COLOR, EMAIL_TEXT_MUTED, EMAIL_LINK_COLOR.
+ */
+function getFormReminderEmailTheme() {
+  return {
+    pageBg: '#000000',
+    cardBg: '#171717',
+    cardBorder: '#262626',
+    accent: '#ff5722',
+    accentEnd: '#ff3d00',
+    textPrimary: '#fafafa',
+    textMuted: '#a3a3a3',
+    linkColor: '#ffab91',
+  };
+}
+
+/**
+ * Plantilla transaccional tema oscuro (magic link): fondo negro, tarjeta carbón, CTA en acento.
+ */
+function buildFormReminderEmailHtml(opts: {
+  brandName: string;
+  recipientEmail: string;
+  preheader: string;
+  headline: string;
+  greetingLine: string;
+  bodyParagraphs: string[];
+  ctaLabel: string;
+  ctaUrl: string;
+  footnote?: string;
+}): string {
+  const t = getFormReminderEmailTheme();
+  const footnoteText = opts.footnote?.trim();
+  const footnoteBlock = footnoteText
+    ? `<p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:${t.textMuted};border-top:1px solid ${t.cardBorder};padding-top:20px;text-align:center;">${escapeHtml(footnoteText)}</p>`
+    : '';
+  const bodyBlocks = opts.bodyParagraphs
+    .map(
+      (p) =>
+        `<p style="margin:0 0 16px;font-size:16px;line-height:1.55;color:${t.textPrimary};text-align:center;">${p}</p>`,
+    )
+    .join('');
+  const href = escapeHtml(opts.ctaUrl);
+  const font =
+    "ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background-color:${t.pageBg};-webkit-font-smoothing:antialiased;font-family:${font};">
+<span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;">${escapeHtml(opts.preheader)}</span>
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:${t.pageBg};">
+  <tr>
+    <td align="center" style="padding:40px 16px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:480px;background-color:${t.cardBg};border-radius:16px;border:1px solid ${t.cardBorder};">
+        <tr>
+          <td style="padding:40px 28px 36px;text-align:center;">
+            <p style="margin:0 0 28px;font-size:20px;font-weight:700;letter-spacing:-0.02em;color:${t.accent};">${escapeHtml(opts.brandName)}</p>
+            <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;font-weight:600;color:${t.textPrimary};letter-spacing:-0.02em;">${escapeHtml(opts.headline)}</h1>
+            <p style="margin:0 0 20px;font-size:16px;line-height:1.55;color:${t.textPrimary};">${opts.greetingLine}</p>
+            ${bodyBlocks}
+            <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:28px auto 24px;">
+              <tr>
+                <td style="border-radius:10px;background-color:${t.accent};background-image:linear-gradient(180deg,${t.accent} 0%,${t.accentEnd} 100%);">
+                  <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="${href}" style="height:50px;v-text-anchor:middle;width:280px;" arcsize="14%" fillcolor="${t.accent}"><w:anchorlock/><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:600;">${escapeHtml(opts.ctaLabel)}</center></v:roundrect><![endif]-->
+                  <!--[if !mso]><!-- -->
+                  <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:15px 32px;font-size:16px;font-weight:600;color:#ffffff;text-decoration:none;font-family:${font};">${escapeHtml(opts.ctaLabel)}</a>
+                  <!--<![endif]-->
+                </td>
+              </tr>
+            </table>
+            <p style="margin:0 0 8px;font-size:13px;line-height:1.5;color:${t.textMuted};text-align:center;">Si el botón no funciona, copia y pega este enlace en el navegador:</p>
+            <p style="margin:0;font-size:12px;line-height:1.5;word-break:break-all;text-align:left;color:${t.textMuted};"><a href="${href}" style="color:${t.linkColor};text-decoration:underline;">${href}</a></p>
+            ${footnoteBlock}
+            <p style="margin:28px 0 0;font-size:12px;line-height:1.6;color:${t.textMuted};text-align:center;">Enviado a ${escapeHtml(opts.recipientEmail)} — ${escapeHtml(opts.brandName)}</p>
+            <p style="margin:8px 0 0;font-size:12px;line-height:1.5;color:${t.textMuted};text-align:center;">No respondas a este mensaje.</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`;
+}
 
 @Injectable()
 export class FormsService {
@@ -26,6 +146,7 @@ export class FormsService {
     private readonly prisma: PrismaService,
     private readonly s3Upload: S3UploadService,
     private readonly translationService: TranslationService,
+    private readonly brevoEmail: BrevoEmailService,
   ) {}
 
   async getTemplates(trainerId: string) {
@@ -731,6 +852,218 @@ export class FormsService {
       timestamp: now.toISOString(), // Devolver en formato ISO UTC para claridad
     };
   }
+
+  /**
+   * Recordatorios por email. Tras processOverdueAssignments: solo pending con ventana válida.
+   * Idempotencia: claim atómico con reminder*SentAt, revertir a null si Brevo falla.
+   * CTA: WEB_URL + FORMS_MEMBER_PATH (defecto /member/forms) + ?assignmentId=
+   */
+  async sendFormAssignmentReminders(): Promise<{
+    windowSent: number;
+    dueSent: number;
+    errors: string[];
+  }> {
+    const errors: string[] = [];
+    let windowSent = 0;
+    let dueSent = 0;
+    const now = new Date();
+
+    const formsBaseUrl = this.buildMemberFormsBaseUrl();
+
+    const windowCandidates = await this.prisma.formAssignment.findMany({
+      where: {
+        status: 'pending',
+        reminderWindowSentAt: null,
+        windowStart: { not: null, lte: now },
+        dueAt: { not: null, gt: now },
+        member: { deleted: false },
+      },
+      include: {
+        member: { select: { email: true, fullName: true } },
+        template: { select: { name: true } },
+      },
+    });
+
+    const emailBrandName = 'TrainerPT';
+
+    for (const a of windowCandidates) {
+      const email = a.member.email?.trim();
+      if (!email) {
+        errors.push(`window ${a.id}: member has no email`);
+        continue;
+      }
+
+      const claimedAt = new Date();
+      const claim = await this.prisma.formAssignment.updateMany({
+        where: {
+          id: a.id,
+          status: 'pending',
+          reminderWindowSentAt: null,
+          windowStart: { not: null, lte: now },
+          dueAt: { not: null, gt: now },
+        },
+        data: { reminderWindowSentAt: claimedAt },
+      });
+
+      if (claim.count !== 1) {
+        continue;
+      }
+
+      const formName = a.template?.name?.trim() || 'Formulario';
+      const cta = this.appendAssignmentQuery(formsBaseUrl, a.id);
+      const subject = `Ya puedes completar: ${formName}`;
+      const greeting = `Hola${a.member.fullName ? ` ${escapeHtml(a.member.fullName)}` : ''},`;
+      const html = buildFormReminderEmailHtml({
+        brandName: emailBrandName,
+        recipientEmail: email,
+        preheader: `Ya puedes completar: ${formName}`,
+        headline: 'Formulario disponible',
+        greetingLine: greeting,
+        bodyParagraphs: [
+          `Tu entrenador te ha asignado <strong>${escapeHtml(formName)}</strong>. La ventana para responder ya está abierta.`,
+          'Pulsa el botón para ir al formulario en la app.',
+        ],
+        ctaLabel: 'Abrir formulario',
+        ctaUrl: cta,
+      });
+
+      try {
+        await this.brevoEmail.sendTransactional({
+          to: email,
+          subject,
+          html,
+          text: [
+            `${emailBrandName}`,
+            '',
+            `Hola${a.member.fullName ? ` ${a.member.fullName}` : ''},`,
+            '',
+            `Ya puedes rellenar el formulario "${formName}".`,
+            '',
+            cta,
+            '',
+            `Enviado a ${email} — ${emailBrandName}`,
+            'No respondas a este mensaje.',
+          ].join('\n'),
+        });
+        windowSent += 1;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`window ${a.id}: ${msg}`);
+        await this.prisma.formAssignment.updateMany({
+          where: { id: a.id, reminderWindowSentAt: claimedAt },
+          data: { reminderWindowSentAt: null },
+        });
+      }
+    }
+
+    const endTodayUtc = this.endOfUtcDay(now);
+
+    const dueCandidates = await this.prisma.formAssignment.findMany({
+      where: {
+        status: 'pending',
+        reminderDueSentAt: null,
+        dueAt: { not: null, gte: now, lte: endTodayUtc },
+        member: { deleted: false },
+      },
+      include: {
+        member: { select: { email: true, fullName: true } },
+        template: { select: { name: true } },
+      },
+    });
+
+    for (const a of dueCandidates) {
+      const email = a.member.email?.trim();
+      if (!email) {
+        errors.push(`due ${a.id}: member has no email`);
+        continue;
+      }
+
+      const claimedAt = new Date();
+      const claim = await this.prisma.formAssignment.updateMany({
+        where: {
+          id: a.id,
+          status: 'pending',
+          reminderDueSentAt: null,
+          dueAt: { not: null, gte: now, lte: endTodayUtc },
+        },
+        data: { reminderDueSentAt: claimedAt },
+      });
+
+      if (claim.count !== 1) {
+        continue;
+      }
+
+      const formName = a.template?.name?.trim() || 'Formulario';
+      const dueHuman = formatDueDateForEmail(a.dueAt!);
+      const cta = this.appendAssignmentQuery(formsBaseUrl, a.id);
+      const subject = `Último día para entregar: ${formName}`;
+      const greeting = `Hola${a.member.fullName ? ` ${escapeHtml(a.member.fullName)}` : ''},`;
+      const html = buildFormReminderEmailHtml({
+        brandName: emailBrandName,
+        recipientEmail: email,
+        preheader: `Último día: ${formName}`,
+        headline: 'Último día para entregar',
+        greetingLine: greeting,
+        bodyParagraphs: [
+          `Hoy es el último día para entregar <strong>${escapeHtml(formName)}</strong>.`,
+          `Fecha límite: <strong>${escapeHtml(dueHuman)}</strong>.`,
+        ],
+        ctaLabel: 'Entregar ahora',
+        ctaUrl: cta,
+      });
+
+      try {
+        await this.brevoEmail.sendTransactional({
+          to: email,
+          subject,
+          html,
+          text: [
+            `${emailBrandName}`,
+            '',
+            `Hola${a.member.fullName ? ` ${a.member.fullName}` : ''},`,
+            '',
+            `Hoy es el último día para entregar "${formName}".`,
+            `Fecha límite: ${dueHuman}`,
+            '',
+            cta,
+            '',
+            `Enviado a ${email} — ${emailBrandName}`,
+            'No respondas a este mensaje.',
+          ].join('\n'),
+        });
+        dueSent += 1;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`due ${a.id}: ${msg}`);
+        await this.prisma.formAssignment.updateMany({
+          where: { id: a.id, reminderDueSentAt: claimedAt },
+          data: { reminderDueSentAt: null },
+        });
+      }
+    }
+
+    return { windowSent, dueSent, errors };
+  }
+
+  private endOfUtcDay(d: Date): Date {
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const day = d.getUTCDate();
+    return new Date(Date.UTC(y, m, day, 23, 59, 59, 999));
+  }
+
+  /** WEB_URL sin slash final + FORMS_MEMBER_PATH (defecto /member/forms). */
+  private buildMemberFormsBaseUrl(): string {
+    const web = (process.env.WEB_URL ?? '').replace(/\/$/, '');
+    const pathRaw = process.env.FORMS_MEMBER_PATH?.trim() || '/member/forms';
+    const path = pathRaw.startsWith('/') ? pathRaw : `/${pathRaw}`;
+    return `${web}${path}`;
+  }
+
+  private appendAssignmentQuery(baseUrl: string, assignmentId: string): string {
+    return `${baseUrl}/${assignmentId}`;
+  }
+
   async syncExercisesFromFreeDb() {
     type FreeExerciseItem = {
       id?: string;
