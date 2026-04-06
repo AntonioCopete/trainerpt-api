@@ -13,5 +13,6 @@ import { BrevoEmailService } from '../common/services/brevo-email.service';
     TranslationService,
     BrevoEmailService,
   ],
+  exports: [S3UploadService],
 })
 export class FormsModule {}

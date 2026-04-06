@@ -72,6 +72,13 @@ export class MembersService {
         },
       });
 
+      await tx.resourceShare.deleteMany({
+        where: {
+          memberId,
+          resource: { trainerId },
+        },
+      });
+
       // Al desvincular, cortamos cualquier assignment pendiente del par,
       // para que no pueda continuarse la recurrencia ni enviar el member.
       const cancelled = await tx.formAssignment.updateMany({
@@ -133,6 +140,13 @@ export class MembersService {
             trainerId,
             memberId,
           },
+        },
+      });
+
+      await tx.resourceShare.deleteMany({
+        where: {
+          memberId,
+          resource: { trainerId },
         },
       });
 

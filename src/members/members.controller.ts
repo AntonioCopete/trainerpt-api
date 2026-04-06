@@ -1,18 +1,38 @@
 import { Controller, Delete, Get, Param, UseGuards } from '@nestjs/common';
 import { MembersService } from './members.service';
+import { ResourcesService } from '../resources/resources.service';
 import { SupabaseJwtGuard } from '../auth/supabase-jwt.guard';
 import { CurrentUser } from '../auth/current-user-decorator';
 import type { AuthUser } from '../auth/auth-user-type';
 
 @Controller('members')
 export class MembersController {
-  constructor(private readonly membersService: MembersService) {}
+  constructor(
+    private readonly membersService: MembersService,
+    private readonly resourcesService: ResourcesService,
+  ) {}
 
   @UseGuards(SupabaseJwtGuard)
   @Get()
   async getMembers(@CurrentUser() user: AuthUser) {
     const members = await this.membersService.getMembersForTrainer(user.id);
     return { members };
+  }
+
+  /** Documentos compartidos con el miembro autenticado (debe ir antes de :memberId). */
+  @UseGuards(SupabaseJwtGuard)
+  @Get('me/resources')
+  async listMyResources(@CurrentUser() user: AuthUser) {
+    return this.resourcesService.listForMember(user.id);
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Get('me/resources/:resourceId/download-url')
+  async myResourceDownloadUrl(
+    @CurrentUser() user: AuthUser,
+    @Param('resourceId') resourceId: string,
+  ) {
+    return this.resourcesService.getMemberDownloadUrl(user.id, resourceId);
   }
 
   @UseGuards(SupabaseJwtGuard)
