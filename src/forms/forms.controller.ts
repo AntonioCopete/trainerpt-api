@@ -221,15 +221,15 @@ export class FormsController {
   }
 
   /**
-   * Internal cron endpoint to process overdue recurring assignments
-   * This should be called by Cloud Scheduler daily
-   * Protected by CRON_SECRET_TOKEN environment variable
+   * Internal cron: nombre histórico. Ejecuta en orden processOverdueAssignments y
+   * sendFormAssignmentReminders (Brevo). Authorization: Bearer CRON_SECRET_TOKEN.
    */
   // @UseGuards(InternalJobAuthGuard)
   @Post('internal/cron/process-overdue')
   async processOverdueAssignments() {
-    const result = await this.formsService.processOverdueAssignments();
-    return result;
+    const overdue = await this.formsService.processOverdueAssignments();
+    const reminders = await this.formsService.sendFormAssignmentReminders();
+    return { overdue, reminders };
   }
 
   // @UseGuards(InternalJobAuthGuard)

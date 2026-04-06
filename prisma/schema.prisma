@@ -186,6 +186,11 @@ model FormAssignment {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  /// UTC instant when the "window opened" reminder email was successfully sent (idempotency).
+  reminderWindowSentAt DateTime?
+  /// UTC instant when the "last day to submit" reminder email was successfully sent (idempotency).
+  reminderDueSentAt    DateTime?
+
   trainer  User         @relation("AssignmentTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
   member   User         @relation("AssignmentMember",  fields: [memberId],  references: [id], onDelete: Cascade)
   template FormTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
