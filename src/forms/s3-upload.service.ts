@@ -73,4 +73,46 @@ export class S3UploadService {
   isAllowedKey(key: string): boolean {
     return key.split('/').length >= 3;
   }
+
+  /**
+   * Trainer catalog files: resources/{trainerId}/{resourceId}/{uuid}-{safeName}.ext
+   */
+  async getResourcePresignedUploadUrl(
+    trainerId: string,
+    resourceId: string,
+    filename: string,
+    contentType: string,
+  ): Promise<{ uploadUrl: string; key: string }> {
+    const lastDot = filename.lastIndexOf('.');
+    const baseName = lastDot > 0 ? filename.slice(0, lastDot) : filename;
+    const ext = lastDot > 0 ? filename.slice(lastDot + 1) : 'bin';
+    const safeName = baseName.replace(/[^a-zA-Z0-9.-]/g, '_').slice(0, 80);
+
+    const key = `resources/${trainerId}/${resourceId}/${crypto.randomUUID()}-${safeName}.${ext}`;
+
+    const file = this.storage.bucket(this.bucket).file(key);
+
+    const [uploadUrl] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires: Date.now() + PRESIGNED_UPLOAD_EXPIRES_IN,
+      contentType,
+    });
+
+    return { uploadUrl, key };
+  }
+
+  isResourceStorageKey(key: string, trainerId: string, resourceId: string): boolean {
+    const prefix = `resources/${trainerId}/${resourceId}/`;
+    return key.startsWith(prefix);
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    if (!key?.trim() || !this.bucket) return;
+    try {
+      await this.storage.bucket(this.bucket).file(key).delete({ ignoreNotFound: true });
+    } catch {
+      // ignore cleanup failures
+    }
+  }
 }
