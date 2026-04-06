@@ -16,11 +16,11 @@ import {
   UpdateFormTemplateDto,
   SubmitAssignmentDto,
   PresignedUploadUrlDto,
+  PhotoUrlsBatchDto,
 } from './dto/create-form-template.dto';
 import { SupabaseJwtGuard } from '../auth/supabase-jwt.guard';
 import { CurrentUser } from '../auth/current-user-decorator';
 import type { AuthUser } from '../auth/auth-user-type';
-import { InternalJobAuthGuard } from '../common/guards/internal-job-auth.guard';
 
 @Controller('forms')
 export class FormsController {
@@ -175,6 +175,35 @@ export class FormsController {
   async getPhotoUrl(@CurrentUser() user: AuthUser, @Query('key') key: string) {
     const result = await this.formsService.getPresignedReadUrl(user.id, key);
     return result;
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Post('photo-urls')
+  async getPhotoUrlsBatch(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: PhotoUrlsBatchDto,
+  ) {
+    return this.formsService.getPresignedReadUrlsBatch(user.id, dto.keys ?? []);
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Get('me/progress')
+  async getMyProgress(@CurrentUser() user: AuthUser) {
+    const progress = await this.formsService.getMemberProgressForSelf(user.id);
+    return { progress };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Get('members/:memberId/progress')
+  async getMemberProgressForTrainer(
+    @CurrentUser() user: AuthUser,
+    @Param('memberId') memberId: string,
+  ) {
+    const progress = await this.formsService.getMemberProgressForTrainer(
+      user.id,
+      memberId,
+    );
+    return { progress };
   }
 
   @UseGuards(SupabaseJwtGuard)

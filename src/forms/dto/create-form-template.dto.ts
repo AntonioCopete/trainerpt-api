@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   Matches,
   IsIn,
@@ -11,6 +12,16 @@ import {
   Max,
   Min,
 } from 'class-validator';
+
+/** Máximo de claves por petición (evita abuso y muchas firmas GCS). */
+export const PHOTO_URLS_BATCH_MAX = 48;
+
+export class PhotoUrlsBatchDto {
+  @IsArray()
+  @ArrayMaxSize(PHOTO_URLS_BATCH_MAX)
+  @IsString({ each: true })
+  keys!: string[];
+}
 
 export class CreateFormTemplateDto {
   @IsString()
@@ -46,11 +57,12 @@ export class AssignFormTemplateDto {
   @IsUUID()
   memberId!: string;
 
-  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
     message: 'dueAt must be a date in YYYY-MM-DD format',
   })
-  dueAt?: string;
+  dueAt!: string;
 
   @IsOptional()
   @IsIn(['none', 'weekly', 'monthly'])

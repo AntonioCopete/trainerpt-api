@@ -11,11 +11,13 @@ import {
   UpdateFormTemplateDto,
   SubmitAssignmentDto,
   PresignedUploadUrlDto,
+  PHOTO_URLS_BATCH_MAX,
 } from './dto/create-form-template.dto';
 import { S3UploadService } from './s3-upload.service';
 import { Prisma } from 'generated/prisma/client';
 import { TranslationService } from '../common/services/translation.service';
 import { BrevoEmailService } from '../common/services/brevo-email.service';
+import { assertValidFormTemplateSchema } from './form-template-schema';
 
 function escapeHtml(s: string): string {
   return s
@@ -186,6 +188,7 @@ export class FormsService {
   }
 
   async createTemplate(trainerId: string, dto: CreateFormTemplateDto) {
+    assertValidFormTemplateSchema(dto.schema);
     const template = await this.prisma.formTemplate.create({
       data: {
         trainerId,
@@ -331,7 +334,10 @@ export class FormsService {
 
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-    if (dto.schema !== undefined) data.schema = dto.schema as any;
+    if (dto.schema !== undefined) {
+      assertValidFormTemplateSchema(dto.schema);
+      data.schema = dto.schema as any;
+    }
 
     return await this.prisma.formTemplate.update({
       where: { id: templateId },
@@ -386,17 +392,12 @@ export class FormsService {
       );
     }
 
-    const dueAt = dto.dueAt ? this.toUtcEndOfDay(dto.dueAt) : null;
-    if (dueAt) {
-      const now = new Date();
-      if (dueAt.getTime() < now.getTime()) {
-        throw new BadRequestException('dueAt must be today or a future date');
-      }
+    const dueAt = this.toUtcEndOfDay(dto.dueAt);
+    const now = new Date();
+    if (dueAt.getTime() < now.getTime()) {
+      throw new BadRequestException('dueAt must be today or a future date');
     }
-    const windowStart = dueAt
-      ? new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS)
-      : // 72 hours before
-        null;
+    const windowStart = new Date(dueAt.getTime() - this.RESPONSE_WINDOW_MS);
 
     const assignment = await this.prisma.formAssignment.create({
       data: {
@@ -506,6 +507,247 @@ export class FormsService {
     }
 
     return assignment;
+  }
+
+  private parseSchemaSnapshot(schemaSnapshot: unknown): Array<{
+    id: string;
+    type: string;
+    label: string;
+    unit?: string;
+    order: number;
+  }> {
+    if (!Array.isArray(schemaSnapshot)) {
+      return [];
+    }
+    return schemaSnapshot
+      .map((raw: unknown, i: number) => {
+        const o =
+          raw !== null && typeof raw === 'object'
+            ? (raw as Record<string, unknown>)
+            : {};
+        const orderRaw = o.order;
+        const order = typeof orderRaw === 'number' ? orderRaw : i;
+        const idRaw = o.id;
+        const id =
+          typeof idRaw === 'string' && idRaw.length > 0
+            ? idRaw
+            : `field_${order}`;
+        const typeRaw = o.type;
+        const type = typeof typeRaw === 'string' ? typeRaw : '';
+        const labelRaw = o.label;
+        const fallbackLabel = typeof idRaw === 'string' ? idRaw : id;
+        const label =
+          typeof labelRaw === 'string' && labelRaw.length > 0
+            ? labelRaw
+            : fallbackLabel;
+        const unitRaw = o.unit;
+        const unit =
+          typeof unitRaw === 'string' && unitRaw.trim() !== ''
+            ? unitRaw
+            : undefined;
+        return { id, type, label, unit, order };
+      })
+      .filter((f) => f.id.length > 0);
+  }
+
+  private parseNumericAnswer(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+      const n = Number(value);
+      if (Number.isFinite(n)) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * En progreso agregamos métricas por clave canónica para unir:
+   * - campos por defecto (`weight`)
+   * - campos creados "desde cero" con label equivalente (`Peso`)
+   */
+  private canonicalProgressMetricId(field: {
+    id: string;
+    type: string;
+    label: string;
+  }): string {
+    if (field.type !== 'number') return field.id;
+    const norm = (v: string) =>
+      v
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+    const idNorm = norm(field.id);
+    const labelNorm = norm(field.label);
+    const key = idNorm || labelNorm;
+    const byLabel = labelNorm;
+
+    if (
+      key === 'weight' ||
+      byLabel === 'peso' ||
+      byLabel === 'peso_corporal' ||
+      byLabel === 'body_weight'
+    ) {
+      return 'weight';
+    }
+
+    if (key === 'age' || byLabel === 'edad') {
+      return 'age';
+    }
+
+    return field.id;
+  }
+
+  private async fetchMemberProgressPayload(opts: {
+    memberId: string;
+    trainerId?: string;
+  }) {
+    const where: Prisma.FormAssignmentWhereInput = {
+      memberId: opts.memberId,
+      status: 'completed',
+    };
+    if (opts.trainerId) {
+      where.trainerId = opts.trainerId;
+    }
+
+    const assignments = await this.prisma.formAssignment.findMany({
+      where,
+      include: {
+        template: { select: { id: true, name: true } },
+        responses: { orderBy: { submittedAt: 'asc' } },
+      },
+    });
+
+    const numberFieldMap = new Map<
+      string,
+      { id: string; label: string; unit?: string }
+    >();
+    const photoFieldMap = new Map<string, { id: string; label: string }>();
+
+    for (const a of assignments) {
+      const fields = this.parseSchemaSnapshot(a.schemaSnapshot);
+      for (const f of fields) {
+        const metricId = this.canonicalProgressMetricId(f);
+        if (f.type === 'number' && !numberFieldMap.has(metricId)) {
+          numberFieldMap.set(metricId, {
+            id: metricId,
+            label: f.label || f.id,
+            ...(f.unit ? { unit: f.unit } : {}),
+          });
+        }
+        if (f.type === 'photo' && !photoFieldMap.has(f.id)) {
+          photoFieldMap.set(f.id, { id: f.id, label: f.label || f.id });
+        }
+      }
+    }
+
+    const points: Array<{
+      assignmentId: string;
+      templateId: string | null;
+      templateName: string;
+      submittedAt: string;
+      numbers: Record<string, number>;
+      photoKeys: Record<string, string>;
+    }> = [];
+
+    for (const a of assignments) {
+      const fields = this.parseSchemaSnapshot(a.schemaSnapshot);
+      const numberFields = fields
+        .filter((f) => f.type === 'number')
+        .map((f) => ({
+          sourceId: f.id,
+          metricId: this.canonicalProgressMetricId(f),
+        }));
+      const photoIds = new Set(
+        fields.filter((f) => f.type === 'photo').map((f) => f.id),
+      );
+
+      for (const r of a.responses) {
+        const answers = (r.answers ?? {}) as Record<string, unknown>;
+        const numbers: Record<string, number> = {};
+        const photoKeys: Record<string, string> = {};
+
+        for (const field of numberFields) {
+          const n = this.parseNumericAnswer(answers[field.sourceId]);
+          if (n !== null) {
+            numbers[field.metricId] = n;
+          }
+        }
+        for (const id of photoIds) {
+          const v = answers[id];
+          if (typeof v === 'string' && v.trim() !== '') {
+            photoKeys[id] = v.trim();
+          }
+        }
+
+        points.push({
+          assignmentId: a.id,
+          templateId: a.templateId,
+          templateName: a.template?.name ?? 'Formulario',
+          submittedAt: r.submittedAt.toISOString(),
+          numbers,
+          photoKeys,
+        });
+      }
+    }
+
+    points.sort(
+      (x, y) =>
+        new Date(x.submittedAt).getTime() - new Date(y.submittedAt).getTime(),
+    );
+
+    const collator = new Intl.Collator('es');
+    return {
+      points,
+      numberFields: [...numberFieldMap.values()].sort((a, b) =>
+        collator.compare(a.label, b.label),
+      ),
+      photoFields: [...photoFieldMap.values()].sort((a, b) =>
+        collator.compare(a.label, b.label),
+      ),
+    };
+  }
+
+  async getMemberProgressForTrainer(trainerId: string, memberId: string) {
+    const link = await this.prisma.trainerMemberLink.findUnique({
+      where: {
+        trainerId_memberId: { trainerId, memberId },
+      },
+    });
+    if (!link) {
+      throw new ForbiddenException('Member is not linked to trainer');
+    }
+    return this.fetchMemberProgressPayload({ trainerId, memberId });
+  }
+
+  async getMemberProgressForSelf(memberId: string) {
+    return this.fetchMemberProgressPayload({ memberId });
+  }
+
+  async getPresignedReadUrlsBatch(userId: string, keys: string[]) {
+    const unique = [
+      ...new Set(
+        keys
+          .map((k) => (typeof k === 'string' ? k.trim() : ''))
+          .filter(Boolean),
+      ),
+    ].slice(0, PHOTO_URLS_BATCH_MAX);
+
+    const urls: Record<string, string> = {};
+    for (const key of unique) {
+      try {
+        const { url } = await this.getPresignedReadUrl(userId, key);
+        urls[key] = url;
+      } catch {
+        // clave inválida o sin permiso: se omite
+      }
+    }
+    return { urls };
   }
 
   async cancelAssignment(
