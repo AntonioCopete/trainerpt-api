@@ -3,10 +3,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from 'src/auth/auth-user-type';
 import { UpdateMeDto } from './dto/update-me-dto';
 import { UserRole } from 'generated/prisma/enums';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subscriptionsService: SubscriptionsService,
+  ) {}
 
   async getMeById(id: string) {
     const user = await this.prisma.user.findFirst({
@@ -70,6 +74,11 @@ export class UsersService {
         role: (dto.role as UserRole) ?? null,
       },
     });
+
+    if (dto.role === UserRole.trainer) {
+      await this.subscriptionsService.ensureFreeSubscriptionIfMissing(id);
+    }
+
     return updatedUser;
   }
 }
