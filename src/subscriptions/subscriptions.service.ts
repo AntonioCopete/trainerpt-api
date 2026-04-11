@@ -61,26 +61,45 @@ export class SubscriptionsService {
     });
   }
 
-  async getCurrentSubscription(userId: string) {
-    // First, expire any canceled subscriptions that passed their endsAt date
-    await this.expireCanceledSubscriptions(userId);
+  private currentSubscriptionWhere(userId: string) {
+    return {
+      userId,
+      OR: [
+        { status: SubscriptionStatus.ACTIVE },
+        {
+          status: SubscriptionStatus.CANCELED,
+          endsAt: { gt: new Date() },
+        },
+      ],
+    };
+  }
 
+  async getCurrentSubscription(userId: string) {
+    await this.expireCanceledSubscriptions(userId);
     return this.prisma.subscription.findFirst({
-      where: {
-        userId,
-        OR: [
-          // Active subscription
-          {
-            status: SubscriptionStatus.ACTIVE,
-          },
-          // Canceled but still valid until endsAt
-          {
-            status: SubscriptionStatus.CANCELED,
-            endsAt: { gt: new Date() }, // Comparison in UTC
-          },
-        ],
-      },
+      where: this.currentSubscriptionWhere(userId),
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Único sitio que crea la FREE por defecto: al confirmar rol trainer (PATCH /users/me).
+   * Idempotente si ya hay suscripción vigente.
+   */
+  async ensureFreeSubscriptionIfMissing(userId: string): Promise<void> {
+    await this.expireCanceledSubscriptions(userId);
+    const existing = await this.prisma.subscription.findFirst({
+      where: this.currentSubscriptionWhere(userId),
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing) return;
+    await this.prisma.subscription.create({
+      data: {
+        userId,
+        plan: SubscriptionPlan.FREE,
+        status: SubscriptionStatus.ACTIVE,
+        startedAt: new Date(),
+      },
     });
   }
 
@@ -109,24 +128,6 @@ export class SubscriptionsService {
           status: SubscriptionStatus.EXPIRED,
         },
       });
-
-      // Create FREE subscription if user doesn't have an active one
-      const hasActiveSub = await this.prisma.subscription.findFirst({
-        where: {
-          userId,
-          status: SubscriptionStatus.ACTIVE,
-        },
-      });
-
-      if (!hasActiveSub) {
-        await this.prisma.subscription.create({
-          data: {
-            userId,
-            plan: SubscriptionPlan.FREE,
-            status: SubscriptionStatus.ACTIVE,
-          },
-        });
-      }
     }
   }
 
