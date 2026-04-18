@@ -1456,4 +1456,47 @@ export class RoutinesService {
 
     return assignments.map((a) => this.withComputedStatus(a));
   }
+
+  /**
+   * Trainer anula una asignación (error, sustitución por otra, etc.).
+   * No cuenta para solapamiento de fechas; el member deja de verla como vigente.
+   */
+  async archiveAssignment(trainerId: string, assignmentId: string) {
+    const assignment = await this.prisma.routineAssignment.findFirst({
+      where: { id: assignmentId, trainerId },
+      include: {
+        template: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+          },
+        },
+      },
+    });
+
+    if (!assignment) {
+      throw new NotFoundException('Routine assignment not found');
+    }
+
+    if (assignment.status === 'archived') {
+      throw new BadRequestException('Routine assignment is already archived');
+    }
+
+    const updated = await this.prisma.routineAssignment.update({
+      where: { id: assignmentId },
+      data: { status: 'archived' },
+      include: {
+        template: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+          },
+        },
+      },
+    });
+
+    return this.withComputedStatus(updated);
+  }
 }

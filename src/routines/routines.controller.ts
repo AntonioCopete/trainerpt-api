@@ -191,6 +191,19 @@ export class RoutinesController {
   }
 
   @UseGuards(SupabaseJwtGuard)
+  @Patch('assignments/:assignmentId/archive')
+  async archiveAssignment(
+    @CurrentUser() user: AuthUser,
+    @Param('assignmentId') assignmentId: string,
+  ) {
+    const assignment = await this.routinesService.archiveAssignment(
+      user.id,
+      assignmentId,
+    );
+    return { assignment };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
   @Get('assignments')
   async getAssignments(
     @CurrentUser() user: AuthUser,
