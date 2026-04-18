@@ -9,7 +9,6 @@ export const BASE_FORM_TEMPLATE_SCHEMA: ReadonlyArray<{
   type: 'text' | 'number' | 'photo';
 }> = [
   { id: 'weight', type: 'number' },
-  { id: 'age', type: 'number' },
   { id: 'shoulders', type: 'number' },
   { id: 'chest', type: 'number' },
   { id: 'biceps', type: 'number' },
@@ -19,6 +18,7 @@ export const BASE_FORM_TEMPLATE_SCHEMA: ReadonlyArray<{
   { id: 'calves', type: 'number' },
   { id: 'front', type: 'photo' },
   { id: 'side', type: 'photo' },
+  { id: 'back', type: 'photo' },
 ];
 
 const ALLOWED_TYPES = new Set(['text', 'number', 'photo']);
