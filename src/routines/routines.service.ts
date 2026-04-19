@@ -1232,10 +1232,21 @@ export class RoutinesService {
         trainerId,
         memberId: dto.memberId,
         templateId: null,
+        name: dto.name.trim(),
+        description: dto.description.trim(),
         schemaSnapshot: dto.schema as any,
         startDate,
         endDate,
         status,
+      },
+      include: {
+        template: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+          },
+        },
       },
     });
 
