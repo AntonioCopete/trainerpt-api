@@ -42,9 +42,9 @@ interface StripeInvoice {
 export class SubscriptionsService {
   private stripe: any;
   private readonly planLimits: Record<SubscriptionPlan, number | null> = {
-    FREE: 3,
-    STARTER: 15,
-    PRO: 40,
+    FREE: 2,
+    STARTER: 5,
+    PRO: 20,
     ELITE: null, // unlimited
   };
 
