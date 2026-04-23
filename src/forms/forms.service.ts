@@ -74,6 +74,7 @@ function getFormReminderEmailTheme() {
  */
 function buildFormReminderEmailHtml(opts: {
   brandName: string;
+  logoUrl?: string;
   recipientEmail: string;
   preheader: string;
   headline: string;
@@ -95,6 +96,10 @@ function buildFormReminderEmailHtml(opts: {
     )
     .join('');
   const href = escapeHtml(opts.ctaUrl);
+  const logoUrl = opts.logoUrl?.trim();
+  const logoBlock = logoUrl
+    ? `<p style="margin:0 0 24px;text-align:center;"><img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(opts.brandName)}" width="180" style="display:block;margin:0 auto;max-width:180px;width:100%;height:auto;border:0;outline:none;text-decoration:none;"></p>`
+    : '';
   const font =
     "ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
@@ -109,6 +114,7 @@ function buildFormReminderEmailHtml(opts: {
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:480px;background-color:${t.cardBg};border-radius:16px;border:1px solid ${t.cardBorder};">
         <tr>
           <td style="padding:40px 28px 36px;text-align:center;">
+            ${logoBlock}
             <p style="margin:0 0 28px;font-size:20px;font-weight:700;letter-spacing:-0.02em;color:${t.accent};">${escapeHtml(opts.brandName)}</p>
             <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;font-weight:600;color:${t.textPrimary};letter-spacing:-0.02em;">${escapeHtml(opts.headline)}</h1>
             <p style="margin:0 0 20px;font-size:16px;line-height:1.55;color:${t.textPrimary};">${opts.greetingLine}</p>
@@ -1127,6 +1133,7 @@ export class FormsService {
     });
 
     const emailBrandName = 'TrainerPT';
+    const emailLogoUrl = this.buildEmailLogoUrl();
 
     for (const a of windowCandidates) {
       const email = a.member.email?.trim();
@@ -1157,6 +1164,7 @@ export class FormsService {
       const greeting = `Hola${a.member.fullName ? ` ${escapeHtml(a.member.fullName)}` : ''},`;
       const html = buildFormReminderEmailHtml({
         brandName: emailBrandName,
+        logoUrl: emailLogoUrl,
         recipientEmail: email,
         preheader: `Ya puedes completar: ${formName}`,
         headline: 'Formulario disponible',
@@ -1242,6 +1250,7 @@ export class FormsService {
       const greeting = `Hola${a.member.fullName ? ` ${escapeHtml(a.member.fullName)}` : ''},`;
       const html = buildFormReminderEmailHtml({
         brandName: emailBrandName,
+        logoUrl: emailLogoUrl,
         recipientEmail: email,
         preheader: `Último día: ${formName}`,
         headline: 'Último día para entregar',
@@ -1300,6 +1309,18 @@ export class FormsService {
     const pathRaw = process.env.FORMS_MEMBER_PATH?.trim() || '/member/forms';
     const path = pathRaw.startsWith('/') ? pathRaw : `/${pathRaw}`;
     return `${web}${path}`;
+  }
+
+  /**
+   * URL pública del logo para emails.
+   * Prioridad: EMAIL_LOGO_URL; fallback: WEB_URL/images/logo/logo.png
+   */
+  private buildEmailLogoUrl(): string | undefined {
+    const explicit = process.env.EMAIL_LOGO_URL?.trim();
+    if (explicit) return explicit;
+    const web = (process.env.WEB_URL ?? '').replace(/\/$/, '');
+    if (!web) return undefined;
+    return `https://yqpwuyvutwccljtjutmi.supabase.co/storage/v1/object/public/trainerpt/logo-black-bg-no-bg.png`;
   }
 
   private appendAssignmentQuery(baseUrl: string, assignmentId: string): string {
