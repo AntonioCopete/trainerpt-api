@@ -26,6 +26,15 @@ export class CreateRoutineTemplateDto {
   schema!: Array<any>;
 }
 
+export class DuplicateRoutineTemplateDto {
+  @IsString()
+  @IsNotEmpty()
+  name!: string;
+
+  @IsString()
+  description!: string;
+}
+
 export class UpdateRoutineTemplateDto {
   @IsOptional()
   @IsString()

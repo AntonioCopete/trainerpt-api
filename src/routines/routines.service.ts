@@ -10,6 +10,7 @@ import {
   CreateCustomExerciseDto,
   CreateCustomRoutineAssignmentDto,
   CreateRoutineTemplateDto,
+  DuplicateRoutineTemplateDto,
   UpdateCustomExerciseDto,
   UpdateRoutineTemplateDto,
 } from './dto/routines.dto';
@@ -1054,6 +1055,40 @@ export class RoutinesService {
         schema: dto.schema as any,
       },
     });
+  }
+
+  async duplicateTemplate(
+    trainerId: string,
+    templateId: string,
+    dto: DuplicateRoutineTemplateDto,
+  ) {
+    const existing = await this.prisma.routineTemplate.findFirst({
+      where: {
+        id: templateId,
+        trainerId,
+        deletedAt: null,
+        isArchived: false,
+      },
+    });
+    if (!existing) {
+      throw new NotFoundException(
+        'Routine template not found or not available for duplication',
+      );
+    }
+
+    const created = await this.prisma.routineTemplate.create({
+      data: {
+        trainerId,
+        name: dto.name.trim(),
+        description: dto.description.trim(),
+        schema: existing.schema as any,
+      },
+    });
+
+    return {
+      ...created,
+      schema: await this.hydrateTemplateSchema(trainerId, created.schema),
+    };
   }
 
   async updateTemplate(
