@@ -17,6 +17,7 @@ import {
   CreateCustomExerciseDto,
   CreateCustomRoutineAssignmentDto,
   CreateRoutineTemplateDto,
+  DuplicateRoutineTemplateDto,
   UpdateCustomExerciseDto,
   UpdateRoutineTemplateDto,
 } from './dto/routines.dto';
@@ -114,6 +115,21 @@ export class RoutinesController {
     @Body() dto: CreateRoutineTemplateDto,
   ) {
     const template = await this.routinesService.createTemplate(user.id, dto);
+    return { template };
+  }
+
+  @UseGuards(SupabaseJwtGuard)
+  @Post('templates/:templateId/duplicate')
+  async duplicateTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('templateId') templateId: string,
+    @Body() dto: DuplicateRoutineTemplateDto,
+  ) {
+    const template = await this.routinesService.duplicateTemplate(
+      user.id,
+      templateId,
+      dto,
+    );
     return { template };
   }
 
