@@ -14,6 +14,10 @@ const ALLOWED_RESOURCE_CONTENT_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
+  /** Excel (.xlsx) */
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  /** Excel 97-2003 (.xls) */
+  'application/vnd.ms-excel',
 ]);
 
 const MAX_RESOURCE_BYTES = 30 * 1024 * 1024;
@@ -29,7 +33,7 @@ export class ResourcesService {
     const ct = (contentType || '').split(';')[0].trim().toLowerCase();
     if (!ALLOWED_RESOURCE_CONTENT_TYPES.has(ct)) {
       throw new BadRequestException(
-        `Tipo de archivo no permitido. Usa PDF o imagen (JPEG, PNG).`,
+        `Tipo de archivo no permitido. Usa PDF, imagen (JPEG, PNG) o Excel (.xlsx / .xls).`,
       );
     }
   }
@@ -230,21 +234,19 @@ export class ResourcesService {
     return { url };
   }
 
-  private toTrainerResource(
-    r: {
-      id: string;
-      title: string;
-      description: string | null;
-      resourceType: ResourceType;
-      filename: string;
-      contentType: string;
-      size: number | null;
-      storageKey: string | null;
-      createdAt: Date;
-      updatedAt: Date;
-      shares: { memberId: string }[];
-    },
-  ) {
+  private toTrainerResource(r: {
+    id: string;
+    title: string;
+    description: string | null;
+    resourceType: ResourceType;
+    filename: string;
+    contentType: string;
+    size: number | null;
+    storageKey: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    shares: { memberId: string }[];
+  }) {
     return {
       id: r.id,
       title: r.title,
