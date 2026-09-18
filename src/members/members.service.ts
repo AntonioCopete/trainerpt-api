@@ -79,8 +79,8 @@ export class MembersService {
         },
       });
 
-      // Al desvincular, cortamos cualquier assignment pendiente del par,
-      // para que no pueda continuarse la recurrencia ni enviar el member.
+      // On unlink, archive pending assignments for the pair so recurrence
+      // cannot continue and the member cannot submit.
       const cancelled = await tx.formAssignment.updateMany({
         where: {
           trainerId,

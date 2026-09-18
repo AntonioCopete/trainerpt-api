@@ -45,8 +45,8 @@ Para assignments recurrentes con `dueAt` definido:
 # Generar token seguro
 openssl rand -base64 32
 
-# Resultado ejemplo:
-# xK8vN2mL9pQ4rT6wU3yH5jF7gD1aS9bE0cV4nM8xZ2qW
+# Example output (do not commit a real token):
+# <CRON_SECRET_TOKEN>
 ```
 
 ### 2. Agregar secret en Cloud Run
@@ -70,7 +70,7 @@ gcloud scheduler jobs create http process-overdue-assignments \
   --schedule="0 2 * * *" \
   --uri="https://trainerpt-backend-XXXXX.run.app/forms/internal/cron/process-overdue" \
   --http-method=POST \
-  --headers="Authorization=Bearer xK8vN2mL9pQ4rT6wU3yH5jF7gD1aS9bE0cV4nM8xZ2qW" \
+  --headers="Authorization=Bearer <CRON_SECRET_TOKEN>" \
   --location=us-central1 \
   --time-zone="UTC"
 ```

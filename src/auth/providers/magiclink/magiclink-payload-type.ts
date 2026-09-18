@@ -1,8 +1,8 @@
 export type SupabaseJwtPayload = {
   iss: string;
-  sub: string; // user id en supabase
+  sub: string; // Supabase user id
   email?: string;
-  email_confirmed_at?: string; // o a veces 'email_verified' según setup
+  email_confirmed_at?: string; // sometimes 'email_verified' depending on setup
   aud?: string;
   exp?: number;
 };

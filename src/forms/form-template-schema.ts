@@ -1,8 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
 
 /**
- * Debe coincidir con `getDefaultTemplateFields()` en web (ids y tipos).
- * Si cambias los defaults en el cliente, actualiza esta lista.
+ * Must match `getDefaultTemplateFields()` on the web app (ids and types).
+ * If you change the client defaults, update this list.
  */
 export const BASE_FORM_TEMPLATE_SCHEMA: ReadonlyArray<{
   id: string;
@@ -24,8 +24,8 @@ export const BASE_FORM_TEMPLATE_SCHEMA: ReadonlyArray<{
 const ALLOWED_TYPES = new Set(['text', 'number', 'photo']);
 
 /**
- * Valida el JSON `schema` de FormTemplate: array de campos con ids únicos
- * y presencia de todos los campos base con el tipo esperado.
+ * Validates FormTemplate JSON `schema`: unique field ids and all base
+ * fields present with the expected type.
  */
 export function assertValidFormTemplateSchema(schema: unknown): void {
   if (!Array.isArray(schema)) {

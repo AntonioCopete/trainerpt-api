@@ -13,7 +13,7 @@ import {
   Min,
 } from 'class-validator';
 
-/** Máximo de claves por petición (evita abuso y muchas firmas GCS). */
+/** Max keys per request (avoids abuse and too many GCS signatures). */
 export const PHOTO_URLS_BATCH_MAX = 48;
 
 export class PhotoUrlsBatchDto {

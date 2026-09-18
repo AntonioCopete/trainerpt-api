@@ -18,7 +18,7 @@ export class LoggingInterceptor implements NestInterceptor {
     const userId = request.user?.id || 'anonymous';
     const now = Date.now();
 
-    // Sanitizar body (no logear passwords, tokens, etc)
+    // Sanitize body (do not log passwords, tokens, etc.)
     const sanitizedBody = this.sanitizeBody(body);
 
     this.logger.log(

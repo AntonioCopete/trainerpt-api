@@ -290,9 +290,9 @@ model RoutineAssignment {
   trainerId      String                  @db.Uuid
   memberId       String                  @db.Uuid
   templateId     String?                 @db.Uuid
-  /// Título de rutina cuando no hay plantilla (`assignments/custom`).
+  /// Routine title when there is no template (`assignments/custom`).
   name           String?                 @db.VarChar(255)
-  /// Descripción cuando no hay plantilla.
+  /// Description when there is no template.
   description    String?                 @db.Text
   schemaSnapshot Json
   startDate      DateTime

@@ -83,8 +83,8 @@ export class SubscriptionsService {
   }
 
   /**
-   * Único sitio que crea la FREE por defecto: al confirmar rol trainer (PATCH /users/me).
-   * Idempotente si ya hay suscripción vigente.
+   * Only place that creates the default FREE plan: when trainer role is confirmed (PATCH /users/me).
+   * Idempotent if a current subscription already exists.
    */
   async ensureFreeSubscriptionIfMissing(userId: string): Promise<void> {
     await this.expireCanceledSubscriptions(userId);

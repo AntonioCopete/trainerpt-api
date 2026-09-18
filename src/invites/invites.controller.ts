@@ -10,7 +10,7 @@ import { RedeemInviteDto } from './dto/redeem-invite.dto';
 export class InvitesController {
   constructor(private readonly invitesService: InvitesService) {}
 
-  // POST /invites → crea una invitación
+  // POST /invites → create an invite
   @UseGuards(SupabaseJwtGuard)
   @Post()
   async createInvite(
@@ -22,7 +22,7 @@ export class InvitesController {
     return { url: inviteUrl };
   }
 
-  // POST /invites/redeem → canjea el código para el usuario autenticado
+  // POST /invites/redeem → redeem the code for the authenticated user
   @UseGuards(SupabaseJwtGuard)
   @Post('redeem')
   async redeemInvite(

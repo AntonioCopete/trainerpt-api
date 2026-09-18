@@ -19,7 +19,7 @@ export class MembersController {
     return { members };
   }
 
-  /** Documentos compartidos con el miembro autenticado (debe ir antes de :memberId). */
+  /** Documents shared with the authenticated member (must be declared before :memberId). */
   @UseGuards(SupabaseJwtGuard)
   @Get('me/resources')
   async listMyResources(@CurrentUser() user: AuthUser) {
@@ -46,8 +46,8 @@ export class MembersController {
   }
 
   /**
-   * Trainer unlink: desvincula un member de la relación (trainerId=authUser).
-   * También cancela (archiva) todas las assignments pendientes del par.
+   * Trainer unlink: remove a member from the relationship (trainerId=authUser).
+   * Also cancels (archives) all pending assignments for the pair.
    */
   @UseGuards(SupabaseJwtGuard)
   @Delete(':memberId/unlink')
@@ -63,8 +63,8 @@ export class MembersController {
   }
 
   /**
-   * Member unlink: desvincula un trainer (trainerId=param) de la relación (memberId=authUser).
-   * También cancela (archiva) todas las assignments pendientes del par.
+   * Member unlink: remove a trainer (trainerId=param) from the relationship (memberId=authUser).
+   * Also cancels (archives) all pending assignments for the pair.
    */
   @UseGuards(SupabaseJwtGuard)
   @Delete('unlink/:trainerId')
