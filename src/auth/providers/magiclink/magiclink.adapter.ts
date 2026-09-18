@@ -6,7 +6,7 @@ export function supabaseToAuthUser(p: SupabaseJwtPayload): AuthUser {
   if (!p.sub) throw new UnauthorizedException('Supabase token missing sub');
   if (!p.email) throw new UnauthorizedException('Supabase token missing email');
 
-  // dependiendo de tu config de supabase, ajusta esta verificación
+  // Adjust this check depending on your Supabase auth config
   const emailVerified = Boolean(p.email_confirmed_at);
 
   if (!emailVerified)

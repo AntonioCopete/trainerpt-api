@@ -28,7 +28,7 @@ export class UsersService {
     return user;
   }
 
-  // Alternativa: si tu auth te da email en vez de id
+  // Alternative: if auth gives you email instead of id
   async getMeByEmail(email: string) {
     const user = await this.prisma.user.findUnique({
       where: { email },

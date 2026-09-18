@@ -250,7 +250,7 @@ export class FormsController {
   }
 
   /**
-   * Internal cron: nombre histórico. Ejecuta en orden processOverdueAssignments y
+   * Internal cron (legacy path name). Runs processOverdueAssignments then
    * sendFormAssignmentReminders (Brevo). Authorization: Bearer CRON_SECRET_TOKEN.
    */
   // @UseGuards(InternalJobAuthGuard)
@@ -264,8 +264,7 @@ export class FormsController {
   // @UseGuards(InternalJobAuthGuard)
   @Post('internal/jobs/sync-exercises')
   async syncExercises() {
-    // Nota: este endpoint ejecuta un job pesado (fetch + traducción + upsert).
-    // Puede tardar varios minutos si no se limita por ENV.
+    // Heavy job (fetch + translate + upsert). May take several minutes unless limited by env.
     const result = await this.formsService.syncExercisesFromFreeDb();
     return result;
   }
